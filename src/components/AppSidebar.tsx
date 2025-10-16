@@ -7,6 +7,7 @@ import {
   Truck,
   LogOut,
 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Sidebar,
   SidebarContent,
@@ -19,8 +20,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { useAuth } from "@/hooks/useAuth";
-import { useToast } from "@/hooks/use-toast";
 
 const menuItems = [
   {
@@ -52,16 +51,11 @@ const menuItems = [
 
 export function AppSidebar() {
   const { state } = useSidebar();
-  const isCollapsed = state === "collapsed";
   const { signOut } = useAuth();
-  const { toast } = useToast();
+  const isCollapsed = state === "collapsed";
 
   const handleLogout = async () => {
     await signOut();
-    toast({
-      title: "Logout realizado",
-      description: "Até logo!",
-    });
   };
 
   return (
