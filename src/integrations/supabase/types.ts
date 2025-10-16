@@ -14,16 +14,396 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      agendamentos: {
+        Row: {
+          created_at: string | null
+          created_by: string
+          data_retirada: string
+          horario: string
+          id: string
+          liberacao_id: string
+          motorista_documento: string
+          motorista_nome: string
+          observacoes: string | null
+          placa_caminhao: string
+          quantidade: number
+          status: string | null
+          tipo_caminhao: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by: string
+          data_retirada: string
+          horario: string
+          id?: string
+          liberacao_id: string
+          motorista_documento: string
+          motorista_nome: string
+          observacoes?: string | null
+          placa_caminhao: string
+          quantidade: number
+          status?: string | null
+          tipo_caminhao?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string
+          data_retirada?: string
+          horario?: string
+          id?: string
+          liberacao_id?: string
+          motorista_documento?: string
+          motorista_nome?: string
+          observacoes?: string | null
+          placa_caminhao?: string
+          quantidade?: number
+          status?: string | null
+          tipo_caminhao?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agendamentos_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "agendamentos_liberacao_id_fkey"
+            columns: ["liberacao_id"]
+            isOneToOne: false
+            referencedRelation: "liberacoes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      armazens: {
+        Row: {
+          ativo: boolean | null
+          cidade: string
+          created_at: string | null
+          estado: string
+          id: string
+          nome: string
+        }
+        Insert: {
+          ativo?: boolean | null
+          cidade: string
+          created_at?: string | null
+          estado: string
+          id?: string
+          nome: string
+        }
+        Update: {
+          ativo?: boolean | null
+          cidade?: string
+          created_at?: string | null
+          estado?: string
+          id?: string
+          nome?: string
+        }
+        Relationships: []
+      }
+      carregamentos: {
+        Row: {
+          agendamento_id: string
+          created_at: string | null
+          id: string
+          numero_nf: string | null
+          observacoes: string | null
+          status: Database["public"]["Enums"]["status_carregamento"] | null
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          agendamento_id: string
+          created_at?: string | null
+          id?: string
+          numero_nf?: string | null
+          observacoes?: string | null
+          status?: Database["public"]["Enums"]["status_carregamento"] | null
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          agendamento_id?: string
+          created_at?: string | null
+          id?: string
+          numero_nf?: string | null
+          observacoes?: string | null
+          status?: Database["public"]["Enums"]["status_carregamento"] | null
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "carregamentos_agendamento_id_fkey"
+            columns: ["agendamento_id"]
+            isOneToOne: false
+            referencedRelation: "agendamentos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "carregamentos_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      estoque: {
+        Row: {
+          armazem_id: string
+          id: string
+          produto_id: string
+          quantidade: number
+          updated_at: string | null
+          updated_by: string | null
+        }
+        Insert: {
+          armazem_id: string
+          id?: string
+          produto_id: string
+          quantidade?: number
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Update: {
+          armazem_id?: string
+          id?: string
+          produto_id?: string
+          quantidade?: number
+          updated_at?: string | null
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "estoque_armazem_id_fkey"
+            columns: ["armazem_id"]
+            isOneToOne: false
+            referencedRelation: "armazens"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "estoque_produto_id_fkey"
+            columns: ["produto_id"]
+            isOneToOne: false
+            referencedRelation: "produtos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "estoque_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fotos_carregamento: {
+        Row: {
+          carregamento_id: string
+          created_at: string | null
+          id: string
+          tipo: Database["public"]["Enums"]["tipo_foto"]
+          uploaded_by: string
+          url: string
+        }
+        Insert: {
+          carregamento_id: string
+          created_at?: string | null
+          id?: string
+          tipo: Database["public"]["Enums"]["tipo_foto"]
+          uploaded_by: string
+          url: string
+        }
+        Update: {
+          carregamento_id?: string
+          created_at?: string | null
+          id?: string
+          tipo?: Database["public"]["Enums"]["tipo_foto"]
+          uploaded_by?: string
+          url?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fotos_carregamento_carregamento_id_fkey"
+            columns: ["carregamento_id"]
+            isOneToOne: false
+            referencedRelation: "carregamentos"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fotos_carregamento_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      liberacoes: {
+        Row: {
+          armazem_id: string
+          cliente_nome: string
+          created_at: string | null
+          created_by: string
+          data_liberacao: string | null
+          id: string
+          pedido_interno: string
+          produto_id: string
+          quantidade_liberada: number
+          quantidade_retirada: number
+          status: Database["public"]["Enums"]["status_liberacao"] | null
+        }
+        Insert: {
+          armazem_id: string
+          cliente_nome: string
+          created_at?: string | null
+          created_by: string
+          data_liberacao?: string | null
+          id?: string
+          pedido_interno: string
+          produto_id: string
+          quantidade_liberada: number
+          quantidade_retirada?: number
+          status?: Database["public"]["Enums"]["status_liberacao"] | null
+        }
+        Update: {
+          armazem_id?: string
+          cliente_nome?: string
+          created_at?: string | null
+          created_by?: string
+          data_liberacao?: string | null
+          id?: string
+          pedido_interno?: string
+          produto_id?: string
+          quantidade_liberada?: number
+          quantidade_retirada?: number
+          status?: Database["public"]["Enums"]["status_liberacao"] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "liberacoes_armazem_id_fkey"
+            columns: ["armazem_id"]
+            isOneToOne: false
+            referencedRelation: "armazens"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "liberacoes_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "liberacoes_produto_id_fkey"
+            columns: ["produto_id"]
+            isOneToOne: false
+            referencedRelation: "produtos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      produtos: {
+        Row: {
+          ativo: boolean | null
+          created_at: string | null
+          id: string
+          nome: string
+          unidade: string | null
+        }
+        Insert: {
+          ativo?: boolean | null
+          created_at?: string | null
+          id?: string
+          nome: string
+          unidade?: string | null
+        }
+        Update: {
+          ativo?: boolean | null
+          created_at?: string | null
+          id?: string
+          nome?: string
+          unidade?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string | null
+          email: string
+          id: string
+          nome: string
+        }
+        Insert: {
+          created_at?: string | null
+          email: string
+          id: string
+          nome: string
+        }
+        Update: {
+          created_at?: string | null
+          email?: string
+          id?: string
+          nome?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string | null
+          id: string
+          role: Database["public"]["Enums"]["user_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          role: Database["public"]["Enums"]["user_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["user_role"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_roles_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["user_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      status_carregamento:
+        | "aguardando"
+        | "liberado"
+        | "carregando"
+        | "carregado"
+        | "nf_entregue"
+      status_liberacao: "pendente" | "parcial" | "concluido"
+      tipo_foto: "chegada" | "durante" | "carregado" | "saida"
+      user_role: "logistica" | "comercial" | "cliente" | "armazem"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +530,17 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      status_carregamento: [
+        "aguardando",
+        "liberado",
+        "carregando",
+        "carregado",
+        "nf_entregue",
+      ],
+      status_liberacao: ["pendente", "parcial", "concluido"],
+      tipo_foto: ["chegada", "durante", "carregado", "saida"],
+      user_role: ["logistica", "comercial", "cliente", "armazem"],
+    },
   },
 } as const

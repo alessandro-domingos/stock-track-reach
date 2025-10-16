@@ -19,6 +19,8 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 
 const menuItems = [
   {
@@ -51,6 +53,16 @@ const menuItems = [
 export function AppSidebar() {
   const { state } = useSidebar();
   const isCollapsed = state === "collapsed";
+  const { signOut } = useAuth();
+  const { toast } = useToast();
+
+  const handleLogout = async () => {
+    await signOut();
+    toast({
+      title: "Logout realizado",
+      description: "Até logo!",
+    });
+  };
 
   return (
     <Sidebar collapsible="icon">
@@ -97,7 +109,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton>
+                <SidebarMenuButton onClick={handleLogout}>
                   <LogOut className="h-4 w-4" />
                   {!isCollapsed && <span>Sair</span>}
                 </SidebarMenuButton>

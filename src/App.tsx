@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import Estoque from "./pages/Estoque";
 import Liberacoes from "./pages/Liberacoes";
@@ -19,17 +20,15 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/estoque" element={<Estoque />} />
-            <Route path="/liberacoes" element={<Liberacoes />} />
-            <Route path="/agendamentos" element={<Agendamentos />} />
-            <Route path="/carregamento" element={<Carregamento />} />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </Layout>
+        <Routes>
+          <Route path="/auth" element={<Auth />} />
+          <Route path="/" element={<Layout><Dashboard /></Layout>} />
+          <Route path="/estoque" element={<Layout><Estoque /></Layout>} />
+          <Route path="/liberacoes" element={<Layout><Liberacoes /></Layout>} />
+          <Route path="/agendamentos" element={<Layout><Agendamentos /></Layout>} />
+          <Route path="/carregamento" element={<Layout><Carregamento /></Layout>} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
