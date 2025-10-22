@@ -7,9 +7,31 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Package } from "lucide-react";
+import { z } from "zod";
+import { useToast } from "@/hooks/use-toast";
+
+const signInSchema = z.object({
+  email: z.string().trim().email("Email inválido").max(255, "Email muito longo"),
+  password: z.string().min(6, "Senha deve ter no mínimo 6 caracteres")
+});
+
+const signUpSchema = z.object({
+  nome: z.string()
+    .trim()
+    .min(2, "Nome deve ter no mínimo 2 caracteres")
+    .max(100, "Nome muito longo")
+    .regex(/^[a-zA-ZÀ-ÿ\s]+$/, "Nome contém caracteres inválidos"),
+  email: z.string().trim().email("Email inválido").max(255, "Email muito longo"),
+  password: z.string()
+    .min(8, "Senha deve ter no mínimo 8 caracteres")
+    .regex(/[A-Z]/, "Senha deve conter letra maiúscula")
+    .regex(/[a-z]/, "Senha deve conter letra minúscula")
+    .regex(/[0-9]/, "Senha deve conter número")
+});
 
 const AuthPage = () => {
   const { user, signIn, signUp } = useAuth();
+  const { toast } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [nome, setNome] = useState("");
@@ -21,15 +43,39 @@ const AuthPage = () => {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    const result = signInSchema.safeParse({ email, password });
+    if (!result.success) {
+      const firstError = result.error.issues[0];
+      toast({
+        variant: "destructive",
+        title: "Erro de validação",
+        description: firstError.message
+      });
+      return;
+    }
+    
     setLoading(true);
-    await signIn(email, password);
+    await signIn(result.data.email, result.data.password);
     setLoading(false);
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    const result = signUpSchema.safeParse({ nome, email, password });
+    if (!result.success) {
+      const firstError = result.error.issues[0];
+      toast({
+        variant: "destructive",
+        title: "Erro de validação",
+        description: firstError.message
+      });
+      return;
+    }
+    
     setLoading(true);
-    await signUp(email, password, nome);
+    await signUp(result.data.email, result.data.password, result.data.nome);
     setLoading(false);
   };
 

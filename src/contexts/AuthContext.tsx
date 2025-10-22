@@ -2,6 +2,11 @@ import { createContext, useContext, useEffect, useState, ReactNode } from "react
 import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { z } from "zod";
+
+const emailSchema = z.string().trim().email().max(255);
+const passwordSchema = z.string().min(6);
+const nomeSchema = z.string().trim().min(2).max(100);
 
 interface AuthContextType {
   user: User | null;
@@ -59,7 +64,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    // Validate inputs
+    const emailResult = emailSchema.safeParse(email);
+    const passwordResult = passwordSchema.safeParse(password);
+    
+    if (!emailResult.success || !passwordResult.success) {
+      toast({
+        variant: "destructive",
+        title: "Erro de validação",
+        description: "Email ou senha inválidos"
+      });
+      return { error: new Error("Validation failed") };
+    }
+    
+    const { error } = await supabase.auth.signInWithPassword({ 
+      email: emailResult.data, 
+      password: passwordResult.data 
+    });
     
     if (error) {
       toast({
@@ -73,15 +94,29 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signUp = async (email: string, password: string, nome: string) => {
+    // Validate inputs
+    const emailResult = emailSchema.safeParse(email);
+    const passwordResult = passwordSchema.safeParse(password);
+    const nomeResult = nomeSchema.safeParse(nome);
+    
+    if (!emailResult.success || !passwordResult.success || !nomeResult.success) {
+      toast({
+        variant: "destructive",
+        title: "Erro de validação",
+        description: "Por favor, verifique os dados informados"
+      });
+      return { error: new Error("Validation failed") };
+    }
+    
     const redirectUrl = `${window.location.origin}/`;
     
     const { error } = await supabase.auth.signUp({
-      email,
-      password,
+      email: emailResult.data,
+      password: passwordResult.data,
       options: {
         emailRedirectTo: redirectUrl,
         data: {
-          nome
+          nome: nomeResult.data
         }
       }
     });
@@ -95,7 +130,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     } else {
       toast({
         title: "Conta criada com sucesso!",
-        description: "Você já pode fazer login."
+        description: "Você já pode fazer login com a role padrão de cliente."
       });
     }
 
