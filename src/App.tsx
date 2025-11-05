@@ -4,21 +4,31 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { usePermissions } from "./hooks/usePermissions";
 import { Layout } from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Estoque from "./pages/Estoque";
 import Liberacoes from "./pages/Liberacoes";
 import Agendamentos from "./pages/Agendamentos";
 import Carregamento from "./pages/Carregamento";
+import Admin from "./pages/Admin";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
+import type { Resource } from "./hooks/usePermissions";
 
 const queryClient = new QueryClient();
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading } = useAuth();
+const ProtectedRoute = ({ 
+  children, 
+  resource 
+}: { 
+  children: React.ReactNode;
+  resource?: Resource;
+}) => {
+  const { user, loading: authLoading } = useAuth();
+  const { canAccess, loading: permLoading } = usePermissions();
   
-  if (loading) {
+  if (authLoading || permLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -31,6 +41,10 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   
   if (!user) {
     return <Navigate to="/auth" replace />;
+  }
+
+  if (resource && !canAccess(resource, 'read')) {
+    return <Navigate to="/" replace />;
   }
   
   return <>{children}</>;
@@ -58,7 +72,7 @@ const App = () => (
             <Route
               path="/estoque"
               element={
-                <ProtectedRoute>
+                <ProtectedRoute resource="estoque">
                   <Layout>
                     <Estoque />
                   </Layout>
@@ -68,7 +82,7 @@ const App = () => (
             <Route
               path="/liberacoes"
               element={
-                <ProtectedRoute>
+                <ProtectedRoute resource="liberacoes">
                   <Layout>
                     <Liberacoes />
                   </Layout>
@@ -78,7 +92,7 @@ const App = () => (
             <Route
               path="/agendamentos"
               element={
-                <ProtectedRoute>
+                <ProtectedRoute resource="agendamentos">
                   <Layout>
                     <Agendamentos />
                   </Layout>
@@ -88,9 +102,19 @@ const App = () => (
             <Route
               path="/carregamento"
               element={
-                <ProtectedRoute>
+                <ProtectedRoute resource="carregamentos">
                   <Layout>
                     <Carregamento />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute resource="users">
+                  <Layout>
+                    <Admin />
                   </Layout>
                 </ProtectedRoute>
               }

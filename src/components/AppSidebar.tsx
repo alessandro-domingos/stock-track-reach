@@ -6,8 +6,10 @@ import {
   Calendar,
   Truck,
   LogOut,
+  Settings,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { usePermissions } from "@/hooks/usePermissions";
 import {
   Sidebar,
   SidebarContent,
@@ -26,37 +28,54 @@ const menuItems = [
     title: "Dashboard",
     url: "/",
     icon: LayoutDashboard,
+    resource: null,
   },
   {
     title: "Estoque",
     url: "/estoque",
     icon: Package,
+    resource: "estoque" as const,
   },
   {
     title: "Liberações",
     url: "/liberacoes",
     icon: ClipboardList,
+    resource: "liberacoes" as const,
   },
   {
     title: "Agendamentos",
     url: "/agendamentos",
     icon: Calendar,
+    resource: "agendamentos" as const,
   },
   {
     title: "Carregamento",
     url: "/carregamento",
     icon: Truck,
+    resource: "carregamentos" as const,
+  },
+  {
+    title: "Administração",
+    url: "/admin",
+    icon: Settings,
+    resource: "users" as const,
   },
 ];
 
 export function AppSidebar() {
   const { state } = useSidebar();
   const { signOut } = useAuth();
+  const { canAccess } = usePermissions();
   const isCollapsed = state === "collapsed";
 
   const handleLogout = async () => {
     await signOut();
   };
+
+  const visibleMenuItems = menuItems.filter(item => {
+    if (!item.resource) return true;
+    return canAccess(item.resource, 'read');
+  });
 
   return (
     <Sidebar collapsible="icon">
@@ -77,7 +96,7 @@ export function AppSidebar() {
           <SidebarGroupLabel>Menu Principal</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {menuItems.map((item) => (
+              {visibleMenuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
                     <NavLink
