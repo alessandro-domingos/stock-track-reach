@@ -352,6 +352,39 @@ export type Database = {
         }
         Relationships: []
       }
+      role_permissions: {
+        Row: {
+          can_create: boolean | null
+          can_delete: boolean | null
+          can_read: boolean | null
+          can_update: boolean | null
+          created_at: string | null
+          id: string
+          resource: string
+          role: Database["public"]["Enums"]["user_role"]
+        }
+        Insert: {
+          can_create?: boolean | null
+          can_delete?: boolean | null
+          can_read?: boolean | null
+          can_update?: boolean | null
+          created_at?: string | null
+          id?: string
+          resource: string
+          role: Database["public"]["Enums"]["user_role"]
+        }
+        Update: {
+          can_create?: boolean | null
+          can_delete?: boolean | null
+          can_read?: boolean | null
+          can_update?: boolean | null
+          created_at?: string | null
+          id?: string
+          resource?: string
+          role?: Database["public"]["Enums"]["user_role"]
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string | null
