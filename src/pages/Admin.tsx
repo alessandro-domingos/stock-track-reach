@@ -93,46 +93,25 @@ const Admin = () => {
     }
 
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: newUserEmail,
-        password: newUserPassword,
-        options: {
-          data: {
-            nome: newUserNome
-          }
-        }
+      const { data, error } = await supabase.functions.invoke("admin-users", {
+        body: {
+          email: newUserEmail,
+          password: newUserPassword,
+          nome: newUserNome,
+          role: newUserRole,
+        },
       });
 
       if (error) {
         toast({
           variant: "destructive",
           title: "Erro ao criar usuário",
-          description: error.message
+          description: (error as any)?.message || "Falha no servidor"
         });
         return;
       }
 
-      if (data.user) {
-        // Aguardar um pouco para os triggers criarem profile e role padrão
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Se a role desejada não é a padrão (cliente), atualizar
-        if (newUserRole !== 'cliente') {
-          const { error: roleError } = await supabase
-            .from('user_roles')
-            .update({ role: newUserRole })
-            .eq('user_id', data.user.id);
-
-          if (roleError) {
-            toast({
-              variant: "destructive",
-              title: "Erro ao atribuir role",
-              description: roleError.message
-            });
-            return;
-          }
-        }
-
+      if (data?.success) {
         toast({
           title: "Usuário criado com sucesso!",
           description: `${newUserNome} foi adicionado ao sistema com a role ${newUserRole}`
