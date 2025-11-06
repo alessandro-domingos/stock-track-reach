@@ -10,7 +10,6 @@ RETURNS TABLE (
   created_at timestamptz,
   roles text[]
 ) AS $$
-  -- Verificar se o usuário atual é admin
   SELECT p.id,
          p.nome,
          p.email,
@@ -19,6 +18,7 @@ RETURNS TABLE (
   FROM public.profiles p
   LEFT JOIN public.user_roles ur ON ur.user_id = p.id
   WHERE EXISTS (
+    -- Verificar se o usuário atual é admin
     SELECT 1 FROM public.user_roles admin_check
     WHERE admin_check.user_id = auth.uid() AND admin_check.role = 'admin'
   )
