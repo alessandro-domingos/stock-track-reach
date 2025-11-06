@@ -10,13 +10,18 @@ RETURNS TABLE (
   created_at timestamptz,
   roles text[]
 ) AS $$
+  -- Verificar se o usuário atual é admin
   SELECT p.id,
          p.nome,
          p.email,
          p.created_at,
-         COALESCE(array_agg(DISTINCT ur.role) FILTER (WHERE ur.role IS NOT NULL), ARRAY[]::text[]) AS roles
+         COALESCE(array_agg(ur.role) FILTER (WHERE ur.role IS NOT NULL), ARRAY[]::text[]) AS roles
   FROM public.profiles p
   LEFT JOIN public.user_roles ur ON ur.user_id = p.id
+  WHERE EXISTS (
+    SELECT 1 FROM public.user_roles admin_check
+    WHERE admin_check.user_id = auth.uid() AND admin_check.role = 'admin'
+  )
   GROUP BY p.id, p.nome, p.email, p.created_at
   ORDER BY p.created_at DESC;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
