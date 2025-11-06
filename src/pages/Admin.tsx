@@ -49,7 +49,16 @@ const Admin = () => {
       return;
     }
 
-    setUsers(data || []);
+    // Map the RPC response to User interface (uuid and timestamptz are returned as strings)
+    const usersData: User[] = (data || []).map(user => ({
+      id: user.id,
+      nome: user.nome,
+      email: user.email,
+      created_at: user.created_at,
+      roles: user.roles || []
+    }));
+
+    setUsers(usersData);
     setLoading(false);
   };
 
