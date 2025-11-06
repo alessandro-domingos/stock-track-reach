@@ -11,7 +11,7 @@ RETURNS TABLE (
   email text,
   created_at timestamptz,
   roles text[]
-) AS $
+) AS $$
   SELECT p.id,
          p.nome,
          p.email,
@@ -21,6 +21,6 @@ RETURNS TABLE (
   LEFT JOIN public.user_roles ur ON ur.user_id = p.id
   GROUP BY p.id, p.nome, p.email, p.created_at
   ORDER BY p.created_at DESC;
-$ LANGUAGE sql STABLE SECURITY DEFINER;
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 GRANT EXECUTE ON FUNCTION public.get_users_with_roles() TO authenticated;

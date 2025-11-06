@@ -36,13 +36,13 @@ const Admin = () => {
 
   const fetchUsers = async () => {
     setLoading(true);
-    const { data, error } = await supabase.rpc('get_users_with_roles');
+    const { data: usersData, error } = await supabase.rpc('get_users_with_roles');
     if (error) {
       toast({ variant: 'destructive', title: 'Erro ao carregar usuários', description: error.message });
       setLoading(false);
       return;
     }
-    const usersMapped: User[] = (data || []).map(u => ({
+    const usersMapped: User[] = (usersData || []).map(u => ({
       id: u.id,
       nome: u.nome,
       email: u.email,
