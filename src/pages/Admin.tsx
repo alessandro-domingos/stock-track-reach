@@ -23,6 +23,14 @@ interface User {
   roles: string[];
 }
 
+interface UserWithRolesRPC {
+  id: string;
+  nome: string;
+  email: string;
+  created_at: string;
+  roles: string[];
+}
+
 const Admin = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +56,7 @@ const Admin = () => {
       return;
     }
     
-    const usersMapped = (data || []).map((u: any) => ({
+    const usersMapped = (data || []).map((u: UserWithRolesRPC) => ({
       id: u.id,
       nome: u.nome,
       email: u.email,
