@@ -26,7 +26,7 @@ interface User {
 const Admin = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState(");
   const [newUserNome, setNewUserNome] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<UserRole>("cliente");
@@ -112,14 +112,11 @@ const Admin = () => {
     }
 
     if (data.user) {
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .insert([{ 
-          id: crypto.randomUUID(),
-          user_id: data.user.id, 
-          role: newUserRole,
-          created_at: new Date().toISOString()
-        }]);
+      // Use secure RPC to assign role (admin-only inside SQL function)
+      const { error: roleError } = await supabase.rpc('assign_role_to_user', {
+        _user_id: data.user.id,
+        _role: newUserRole
+      });
 
       if (roleError) {
         toast({
@@ -144,10 +141,11 @@ const Admin = () => {
   };
 
   const handleUpdateUserRole = async (userId: string, newRole: UserRole) => {
-    const { error } = await supabase
-      .from('user_roles')
-      .update({ role: newRole })
-      .eq('user_id', userId);
+    // Use secure RPC to update role (admin-only inside SQL function)
+    const { error } = await supabase.rpc('update_user_role', {
+      _user_id: userId,
+      _role: newRole
+    });
 
     if (error) {
       toast({
