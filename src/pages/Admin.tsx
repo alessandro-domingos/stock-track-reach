@@ -37,44 +37,28 @@ const Admin = () => {
   const fetchUsers = async () => {
     setLoading(true);
     
-    const { data: profiles, error: profilesError } = await supabase
-      .from('profiles')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const { data, error } = await supabase.rpc('get_users_with_roles');
 
-    if (profilesError) {
+    if (error) {
       toast({
         variant: "destructive",
         title: "Erro ao carregar usuários",
-        description: profilesError.message
+        description: error.message
       });
       setLoading(false);
       return;
     }
 
-    const { data: userRoles, error: rolesError } = await supabase
-      .from('user_roles')
-      .select('*');
-
-    if (rolesError) {
-      toast({
-        variant: "destructive",
-        title: "Erro ao carregar roles",
-        description: rolesError.message
-      });
-      setLoading(false);
-      return;
-    }
-
-    const usersWithRoles = profiles.map(profile => ({
-      id: profile.id,
-      nome: profile.nome,
-      email: profile.email,
-      created_at: profile.created_at,
-      roles: userRoles.filter(ur => ur.user_id === profile.id).map(ur => ur.role)
+    // Map the RPC response to User interface (uuid and timestamptz are returned as strings)
+    const usersData: User[] = (data || []).map(user => ({
+      id: user.id,
+      nome: user.nome,
+      email: user.email,
+      created_at: user.created_at,
+      roles: user.roles || []
     }));
 
-    setUsers(usersWithRoles);
+    setUsers(usersData);
     setLoading(false);
   };
 
