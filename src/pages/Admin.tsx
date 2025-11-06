@@ -92,45 +92,50 @@ const Admin = () => {
       return;
     }
 
-    const { data, error } = await supabase.auth.signUp({
-      email: newUserEmail,
-      password: newUserPassword,
-      options: {
-        data: {
-          nome: newUserNome
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: newUserEmail,
+        password: newUserPassword,
+        options: {
+          data: {
+            nome: newUserNome
+          }
         }
-      }
-    });
-
-    if (error) {
-      toast({
-        variant: "destructive",
-        title: "Erro ao criar usuário",
-        description: error.message
       });
-      return;
-    }
 
-    if (data.user) {
-      const { error: roleError } = await supabase
-        .from('user_roles')
-        .insert([{ 
-          id: crypto.randomUUID(),
-          user_id: data.user.id, 
-          role: newUserRole,
-          created_at: new Date().toISOString()
-        }]);
-
-      if (roleError) {
+      if (error) {
         toast({
           variant: "destructive",
-          title: "Erro ao atribuir role",
-          description: roleError.message
+          title: "Erro ao criar usuário",
+          description: error.message
         });
-      } else {
+        return;
+      }
+
+      if (data.user) {
+        // Aguardar um pouco para os triggers criarem profile e role padrão
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Se a role desejada não é a padrão (cliente), atualizar
+        if (newUserRole !== 'cliente') {
+          const { error: roleError } = await supabase
+            .from('user_roles')
+            .update({ role: newUserRole })
+            .eq('user_id', data.user.id);
+
+          if (roleError) {
+            toast({
+              variant: "destructive",
+              title: "Erro ao atribuir role",
+              description: roleError.message
+            });
+            return;
+          }
+        }
+
         toast({
           title: "Usuário criado com sucesso!",
-          description: `${newUserNome} foi adicionado ao sistema`
+          description: `${newUserNome} foi adicionado ao sistema com a role ${newUserRole}`
         });
         
         setNewUserEmail("");
@@ -138,8 +143,17 @@ const Admin = () => {
         setNewUserPassword("");
         setNewUserRole("cliente");
         setDialogOpen(false);
+        
+        // Aguardar um pouco antes de recarregar a lista
+        await new Promise(resolve => setTimeout(resolve, 500));
         fetchUsers();
       }
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao criar usuário",
+        description: err.message || "Erro desconhecido"
+      });
     }
   };
 
