@@ -24,7 +24,7 @@ export interface Permission {
 
 export const usePermissions = () => {
   const { userRoles } = useAuth();
-  const [permissions, setPermissions] = useState<Record<Resource, Permission>>({} as any);
+  const [permissions, setPermissions] = useState<Record<Resource, Permission>>({} as Record<Resource, Permission>);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export const usePermissions = () => {
           permsMap[perm.resource].can_delete = permsMap[perm.resource].can_delete || perm.can_delete;
         });
 
-        setPermissions(permsMap as any);
+        setPermissions(permsMap as Record<Resource, Permission>);
       }
       
       setLoading(false);
