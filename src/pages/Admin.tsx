@@ -11,6 +11,7 @@ import { Users, UserPlus, Shield } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { getErrorMessage } from "@/lib/utils";
 import type { Database } from "@/integrations/supabase/types";
 
 type UserRole = Database['public']['Enums']['user_role'];
@@ -81,7 +82,7 @@ const Admin = () => {
         toast({
           variant: "destructive",
           title: "Erro ao criar usuário",
-          description: (error as { message?: string })?.message || "Falha no servidor"
+          description: getErrorMessage(error, "Falha no servidor")
         });
         return;
       }
@@ -103,11 +104,10 @@ const Admin = () => {
         fetchUsers();
       }
     } catch (err) {
-      const error = err as { message?: string };
       toast({
         variant: "destructive",
         title: "Erro ao criar usuário",
-        description: error.message || "Erro desconhecido"
+        description: getErrorMessage(err)
       });
     }
   };

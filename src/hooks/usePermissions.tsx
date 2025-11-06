@@ -40,7 +40,7 @@ export const usePermissions = () => {
         .in('role', userRoles as UserRole[]);
 
       if (!error && data) {
-        const permsMap: Record<string, Permission> = {};
+        const permsMap: Record<Resource, Permission> = {} as Record<Resource, Permission>;
         
         data.forEach(perm => {
           if (!permsMap[perm.resource]) {
@@ -59,7 +59,7 @@ export const usePermissions = () => {
           permsMap[perm.resource].can_delete = permsMap[perm.resource].can_delete || perm.can_delete;
         });
 
-        setPermissions(permsMap as Record<Resource, Permission>);
+        setPermissions(permsMap);
       }
       
       setLoading(false);
