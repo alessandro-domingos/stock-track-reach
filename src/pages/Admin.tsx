@@ -137,10 +137,7 @@ const Admin = () => {
   };
 
   const handleUpdateUserRole = async (userId: string, newRole: UserRole) => {
-    const { error } = await supabase
-      .from('user_roles')
-      .update({ role: newRole })
-      .eq('user_id', userId);
+    const { error } = await supabase.rpc('update_user_role', { _user_id: userId, _role: newRole });
 
     if (error) {
       toast({
