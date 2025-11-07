@@ -36,7 +36,7 @@ const Admin = () => {
 
   const fetchUsers = async () => {
     setLoading(true);
-    const { data: usersData, error } = await supabase.rpc('get_users_with_roles');
+    const { data: usersData, error } = await (supabase.rpc as any)('get_users_with_roles');
     if (error) {
       toast({ variant: 'destructive', title: 'Erro ao carregar usuários', description: error.message });
       setLoading(false);
@@ -112,7 +112,7 @@ const Admin = () => {
   };
 
   const handleUpdateUserRole = async (userId: string, newRole: UserRole) => {
-    const { error } = await supabase.rpc('update_user_role', { _user_id: userId, _role: newRole });
+    const { error } = await (supabase.rpc as any)('update_user_role', { _user_id: userId, _role: newRole });
 
     if (error) {
       toast({
