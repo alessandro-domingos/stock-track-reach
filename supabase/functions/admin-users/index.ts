@@ -66,24 +66,41 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Ensure requester is admin
-    const { data: isAdmin, error: roleCheckError } = await userClient.rpc("has_role", {
-      _user_id: requester.id,
-      _role: "admin",
-    });
+    // Check if there are any admins in the system
+    const { count: adminCount, error: countError } = await userClient
+      .from("user_roles")
+      .select("*", { count: "exact", head: true })
+      .eq("role", "admin");
 
-    if (roleCheckError) {
-      return new Response(JSON.stringify({ error: "Role check failed", details: roleCheckError.message }), {
+    if (countError) {
+      return new Response(JSON.stringify({ error: "Failed to check admin count", details: countError.message }), {
         status: 500,
         headers: { "content-type": "application/json", ...corsHeaders },
       });
     }
 
-    if (!isAdmin) {
-      return new Response(JSON.stringify({ error: "Forbidden" }), {
-        status: 403,
-        headers: { "content-type": "application/json", ...corsHeaders },
+    const noAdminsExist = (adminCount ?? 0) === 0;
+
+    // If admins exist, ensure requester is admin
+    if (!noAdminsExist) {
+      const { data: isAdmin, error: roleCheckError } = await userClient.rpc("has_role", {
+        _user_id: requester.id,
+        _role: "admin",
       });
+
+      if (roleCheckError) {
+        return new Response(JSON.stringify({ error: "Role check failed", details: roleCheckError.message }), {
+          status: 500,
+          headers: { "content-type": "application/json", ...corsHeaders },
+        });
+      }
+
+      if (!isAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: Only admins can create users" }), {
+          status: 403,
+          headers: { "content-type": "application/json", ...corsHeaders },
+        });
+      }
     }
 
     // Service role client to create auth user and bypass RLS for writes
