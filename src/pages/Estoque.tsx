@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -7,10 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Package } from "lucide-react";
+import { Plus, Package, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/contexts/AuthContext";
-import { supabase } from "@/integrations/supabase/client";
 
 type StockStatus = "normal" | "baixo";
 type Unidade = "t" | "kg";
@@ -22,25 +20,26 @@ interface StockItem {
   quantidade: number;
   unidade: Unidade;
   status: StockStatus;
+  data: string; // dd/mm/yyyy (adicionado para filtros de data)
 }
 
 const computeStatus = (qtd: number): StockStatus => (qtd < 10 ? "baixo" : "normal");
 
+const parseDate = (d: string) => {
+  // dd/mm/yyyy -> Date
+  const [dd, mm, yyyy] = d.split("/");
+  return new Date(Number(yyyy), Number(mm) - 1, Number(dd));
+};
+
 const Estoque = () => {
   const { toast } = useToast();
-  const { hasRole, user } = useAuth();
 
-  // Permissão: agora Admin OU Logística podem atualizar
-  const canUpdateStock = hasRole("logistica") || hasRole("admin");
-  const roleUsed = hasRole("admin") ? "admin" : (hasRole("logistica") ? "logistica" : "sem-permissao");
-
-  // Lista mockada de estoque (local, sem persistência)
   const [estoque, setEstoque] = useState<StockItem[]>([
-    { id: 1, produto: "Ureia", armazem: "São Paulo", quantidade: 45.5, unidade: "t", status: "normal" },
-    { id: 2, produto: "NPK 20-05-20", armazem: "Rio de Janeiro", quantidade: 32.0, unidade: "t", status: "normal" },
-    { id: 3, produto: "Ureia", armazem: "Belo Horizonte", quantidade: 8.5, unidade: "t", status: "baixo" },
-    { id: 4, produto: "Super Simples", armazem: "São Paulo", quantidade: 67.2, unidade: "t", status: "normal" },
-    { id: 5, produto: "MAP", armazem: "Curitiba", quantidade: 23.8, unidade: "t", status: "normal" },
+    { id: 1, produto: "Ureia", armazem: "São Paulo", quantidade: 45.5, unidade: "t", status: "normal", data: "17/01/2024" },
+    { id: 2, produto: "NPK 20-05-20", armazem: "Rio de Janeiro", quantidade: 32.0, unidade: "t", status: "normal", data: "18/01/2024" },
+    { id: 3, produto: "Ureia", armazem: "Belo Horizonte", quantidade: 8.5, unidade: "t", status: "baixo", data: "18/01/2024" },
+    { id: 4, produto: "Super Simples", armazem: "São Paulo", quantidade: 67.2, unidade: "t", status: "normal", data: "19/01/2024" },
+    { id: 5, produto: "MAP", armazem: "Curitiba", quantidade: 23.8, unidade: "t", status: "normal", data: "19/01/2024" },
   ]);
 
   // Dialog "Novo Produto"
@@ -56,7 +55,7 @@ const Estoque = () => {
     setNovoProduto({ nome: "", armazem: "", quantidade: "", unidade: "t" });
   };
 
-  const handleCreateProduto = async () => {
+  const handleCreateProduto = () => {
     const { nome, armazem, quantidade, unidade } = novoProduto;
 
     if (!nome.trim() || !armazem.trim() || !quantidade) {
@@ -86,6 +85,7 @@ const Estoque = () => {
       quantidade: qtdNum,
       unidade,
       status: computeStatus(qtdNum),
+      data: new Date().toLocaleDateString("pt-BR"),
     };
 
     setEstoque((prev) => [item, ...prev]);
@@ -99,103 +99,72 @@ const Estoque = () => {
     setDialogOpen(false);
   };
 
-  // Dialog "Atualizar"
-  const [dialogUpdateOpen, setDialogUpdateOpen] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<StockItem | null>(null);
-  const [updateForm, setUpdateForm] = useState({
-    currentQty: 0,
-    newQty: "",
-    reason: "",
-  });
+  /* ---------------- Filtros ---------------- */
+  const [search, setSearch] = useState("");
+  const [selectedStatuses, setSelectedStatuses] = useState<StockStatus[]>([]);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [selectedWarehouses, setSelectedWarehouses] = useState<string[]>([]);
 
-  const openUpdateDialog = (item: StockItem) => {
-    setSelectedItem(item);
-    setUpdateForm({
-      currentQty: item.quantidade,
-      newQty: String(item.quantidade),
-      reason: "",
-    });
-    setDialogUpdateOpen(true);
-  };
+  const allStatuses: StockStatus[] = ["normal", "baixo"];
+  const allWarehouses = useMemo(
+    () => Array.from(new Set(estoque.map((e) => e.armazem))).sort(),
+    [estoque]
+  );
 
-  const handleSaveUpdate = async () => {
-    if (!canUpdateStock) {
-      toast({
-        variant: "destructive",
-        title: "Permissão insuficiente",
-        description: "Apenas usuários com perfil de Logística ou Admin podem atualizar o estoque.",
-      });
-      return;
-    }
-
-    const newQtyNum = Number(updateForm.newQty);
-    if (Number.isNaN(newQtyNum) || newQtyNum < 0) {
-      toast({
-        variant: "destructive",
-        title: "Quantidade inválida",
-        description: "A nova quantidade não pode ser negativa.",
-      });
-      return;
-    }
-
-    if (!updateForm.reason) {
-      toast({
-        variant: "destructive",
-        title: "Motivo obrigatório",
-        description: "Selecione um motivo para a alteração.",
-      });
-      return;
-    }
-
-    if (!selectedItem) return;
-
-    // Atualiza localmente
-    setEstoque((prev) =>
-      prev.map((e) =>
-        e.id === selectedItem.id
-          ? { ...e, quantidade: newQtyNum, status: computeStatus(newQtyNum) }
-          : e
-      )
+  const toggleStatus = (st: StockStatus) => {
+    setSelectedStatuses((prev) =>
+      prev.includes(st) ? prev.filter((s) => s !== st) : [...prev, st]
     );
-
-    toast({
-      title: "Estoque atualizado",
-      description: `Operação: ${updateForm.reason}. Quantidade alterada para ${newQtyNum}. Perfil: ${roleUsed}.`,
-    });
-
-    // Tenta persistir no backend (quando estrutura existir)
-    try {
-      // Preferência por RPC futura (ex.: update_stock_quantity)
-      const { error } = await supabase
-        .from("stock_balances")
-        .update({
-          quantidade_atual: newQtyNum,
-          updated_by: user?.id ?? null,
-          updated_at: new Date().toISOString(),
-          motivo: updateForm.reason,
-        })
-        .eq("id", selectedItem.id);
-
-      if (error) {
-        toast({
-          variant: "destructive",
-          title: "Persistência pendente",
-          description:
-            "Não foi possível salvar no banco agora. As migrations/estrutura podem estar faltando. A atualização local foi mantida.",
-        });
-      }
-    } catch {
-      toast({
-        variant: "destructive",
-        title: "Persistência pendente",
-        description:
-          "Não foi possível salvar no banco agora. As migrations/estrutura podem estar faltando. A atualização local foi mantida.",
-      });
-    }
-
-    setDialogUpdateOpen(false);
-    setSelectedItem(null);
   };
+
+  const toggleWarehouse = (w: string) => {
+    setSelectedWarehouses((prev) =>
+      prev.includes(w) ? prev.filter((x) => x !== w) : [...prev, w]
+    );
+  };
+
+  const clearFilters = () => {
+    setSearch("");
+    setSelectedStatuses([]);
+    setDateFrom("");
+    setDateTo("");
+    setSelectedWarehouses([]);
+  };
+
+  const filteredEstoque = useMemo(() => {
+    return estoque.filter((item) => {
+      const term = search.trim().toLowerCase();
+      if (term) {
+        const hay = `${item.produto} ${item.armazem}`.toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+
+      if (selectedStatuses.length > 0 && !selectedStatuses.includes(item.status)) {
+        return false;
+      }
+
+      if (selectedWarehouses.length > 0 && !selectedWarehouses.includes(item.armazem)) {
+        return false;
+      }
+
+      if (dateFrom) {
+        const from = new Date(dateFrom);
+        if (parseDate(item.data) < from) return false;
+      }
+      if (dateTo) {
+        const to = new Date(dateTo);
+        // Ajustar para fim do dia
+        to.setHours(23, 59, 59, 999);
+        if (parseDate(item.data) > to) return false;
+      }
+
+      return true;
+    });
+  }, [estoque, search, selectedStatuses, selectedWarehouses, dateFrom, dateTo]);
+
+  const showingCount = filteredEstoque.length;
+  const totalCount = estoque.length;
 
   return (
     <div className="min-h-screen bg-background">
@@ -254,7 +223,9 @@ const Estoque = () => {
                     <Label htmlFor="unidade">Unidade</Label>
                     <Select
                       value={novoProduto.unidade}
-                      onValueChange={(v) => setNovoProduto((s) => ({ ...s, unidade: v as Unidade }))}
+                      onValueChange={(v) =>
+                        setNovoProduto((s) => ({ ...s, unidade: v as Unidade }))
+                      }
                     >
                       <SelectTrigger id="unidade">
                         <SelectValue placeholder="Selecione a unidade" />
@@ -281,9 +252,91 @@ const Estoque = () => {
         }
       />
 
+      {/* Barra de Filtros */}
+      <div className="container mx-auto px-6 pt-4">
+        <div className="rounded-md border p-4 space-y-4">
+          <div className="flex flex-col md:flex-row gap-4">
+            <div className="flex-1 space-y-1">
+              <Label htmlFor="busca">Busca</Label>
+              <Input
+                id="busca"
+                placeholder="Filtrar por produto ou armazém..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Status</Label>
+              <div className="flex flex-wrap gap-2">
+                {allStatuses.map((st) => {
+                  const active = selectedStatuses.includes(st);
+                  return (
+                    <Badge
+                      key={st}
+                      onClick={() => toggleStatus(st)}
+                      className={`cursor-pointer select-none ${
+                        active ? "bg-gradient-primary text-white" : "bg-muted"
+                      }`}
+                    >
+                      {st === "normal" ? "Normal" : "Baixo"}
+                    </Badge>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Armazéns</Label>
+              <div className="flex flex-wrap gap-2 max-w-xs">
+                {allWarehouses.map((w) => {
+                  const active = selectedWarehouses.includes(w);
+                  return (
+                    <Badge
+                      key={w}
+                      onClick={() => toggleWarehouse(w)}
+                      className={`cursor-pointer select-none ${
+                        active ? "bg-gradient-primary text-white" : "bg-muted"
+                      }`}
+                    >
+                      {w}
+                    </Badge>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Período (Data)</Label>
+              <div className="flex gap-2">
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="w-40"
+                />
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="w-40"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">
+              Mostrando <span className="font-medium">{showingCount}</span> de{" "}
+              <span className="font-medium">{totalCount}</span> resultados
+            </p>
+            <Button variant="ghost" onClick={clearFilters} className="gap-2">
+              <X className="h-4 w-4" />
+              Limpar Filtros
+            </Button>
+          </div>
+        </div>
+      </div>
+
       <div className="container mx-auto px-6 py-8">
         <div className="grid gap-4">
-          {estoque.map((item) => (
+          {filteredEstoque.map((item) => (
             <Card key={item.id} className="transition-all hover:shadow-md">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
@@ -293,7 +346,9 @@ const Estoque = () => {
                     </div>
                     <div>
                       <h3 className="font-semibold text-foreground">{item.produto}</h3>
-                      <p className="text-sm text-muted-foreground">{item.armazem}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {item.armazem} • {item.data}
+                      </p>
                     </div>
                   </div>
 
@@ -307,14 +362,7 @@ const Estoque = () => {
                     <Badge variant={item.status === "baixo" ? "destructive" : "secondary"}>
                       {item.status === "baixo" ? "Estoque Baixo" : "Normal"}
                     </Badge>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => openUpdateDialog(item)}
-                      disabled={!canUpdateStock}
-                      title={!canUpdateStock ? "Apenas Logística ou Admin podem atualizar" : "Atualizar quantidade"}
-                    >
+                    <Button variant="outline" size="sm">
                       Atualizar
                     </Button>
                   </div>
@@ -322,73 +370,14 @@ const Estoque = () => {
               </CardContent>
             </Card>
           ))}
+
+          {filteredEstoque.length === 0 && (
+            <div className="text-sm text-muted-foreground py-8 text-center">
+              Nenhum resultado encontrado com os filtros atuais.
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Dialog Atualizar Quantidade */}
-      <Dialog open={dialogUpdateOpen} onOpenChange={setDialogUpdateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Atualizar Quantidade</DialogTitle>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div>
-              <Label>Produto</Label>
-              <p className="text-sm text-muted-foreground">
-                {selectedItem ? `${selectedItem.produto} — ${selectedItem.armazem}` : "-"}
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="qtd_atual">Quantidade atual</Label>
-                <Input id="qtd_atual" value={updateForm.currentQty} readOnly />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="nova_qtd">Nova quantidade</Label>
-                <Input
-                  id="nova_qtd"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={updateForm.newQty}
-                  onChange={(e) => setUpdateForm((s) => ({ ...s, newQty: e.target.value }))}
-                  placeholder="Ex.: 50"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="motivo">Motivo da alteração</Label>
-              <Select
-                value={updateForm.reason}
-                onValueChange={(v) => setUpdateForm((s) => ({ ...s, reason: v }))}
-              >
-                <SelectTrigger id="motivo">
-                  <SelectValue placeholder="Selecione o motivo" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Entrada">Entrada</SelectItem>
-                  <SelectItem value="Saída">Saída</SelectItem>
-                  <SelectItem value="Ajuste de Inventário">Ajuste de Inventário</SelectItem>
-                  <SelectItem value="Transferência">Transferência</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogUpdateOpen(false)}>
-              Cancelar
-            </Button>
-            <Button className="bg-gradient-primary" onClick={handleSaveUpdate}>
-              Salvar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };
