@@ -8,12 +8,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Calendar, Clock, User, Truck } from "lucide-react";
+import { Plus, Calendar, Clock, User, Truck, Pencil } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
-type AgendamentoStatus = "confirmado" | "pendente";
+/* Tipos */
+type AgendamentoStatus = "confirmado" | "pendente" | "concluido" | "cancelado";
 
 interface AgendamentoItem {
   id: number;
@@ -27,6 +28,8 @@ interface AgendamentoItem {
   documento: string; // CPF
   pedido: string;
   status: AgendamentoStatus;
+  releaseId?: string | number;
+  created_by?: string | null;
 }
 
 interface ReleaseOption {
@@ -39,6 +42,7 @@ interface ReleaseOption {
   status?: string;
 }
 
+/* Utilitários de data e máscara/validação */
 const todayStr = () => {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -47,9 +51,15 @@ const todayStr = () => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
-const formatDateBR = (isoDate: string) => {
+const formatDateBRFromISO = (isoDate: string) => {
   const [yyyy, mm, dd] = isoDate.split("-");
   return `${dd}/${mm}/${yyyy}`;
+};
+
+const parseDateBRtoISO = (brDate: string) => {
+  // brDate: dd/mm/yyyy -> yyyy-mm-dd
+  const [dd, mm, yyyy] = brDate.split("/");
+  return `${yyyy}-${mm}-${dd}`;
 };
 
 const maskCPF = (value: string) => {
@@ -64,7 +74,6 @@ const maskCPF = (value: string) => {
 const isValidCPF = (cpfMasked: string) => {
   const cpf = cpfMasked.replace(/\D/g, "");
   if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
-  // Dígitos verificadores
   let sum = 0;
   for (let i = 0; i < 9; i++) sum += parseInt(cpf[i]) * (10 - i);
   let check = 11 - (sum % 11);
@@ -79,11 +88,9 @@ const isValidCPF = (cpfMasked: string) => {
 
 const maskPlate = (value: string) => {
   let v = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  // Tentar formatar AAA-9999 enquanto possível
   if (/^[A-Z]{3}\d{4}$/.test(v)) {
     return v.slice(0, 3) + "-" + v.slice(3);
   }
-  // Para Mercosul (AAA9A99) manter sem hífen
   return v.slice(0, 7);
 };
 
@@ -100,13 +107,21 @@ const remainingForRelease = (release: ReleaseOption) => {
   return Math.max(0, qtd - retirado);
 };
 
+const formatDateBR = (d = new Date()) => {
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
+/* Componente principal */
 const Agendamentos = () => {
   const { toast } = useToast();
   const { hasRole, user } = useAuth();
 
   const canCreate = hasRole("admin") || hasRole("logistica") || hasRole("cliente");
 
-  // Mock inicial
+  /* Mock inicial (adicionamos releaseId e created_by para testes de permissão) */
   const [agendamentos, setAgendamentos] = useState<AgendamentoItem[]>([
     {
       id: 1,
@@ -119,7 +134,9 @@ const Agendamentos = () => {
       motorista: "João Silva",
       documento: "123.456.789-00",
       pedido: "PED-2024-001",
-      status: "confirmado"
+      status: "confirmado",
+      releaseId: "1",
+      created_by: null
     },
     {
       id: 2,
@@ -132,7 +149,9 @@ const Agendamentos = () => {
       motorista: "Maria Santos",
       documento: "987.654.321-00",
       pedido: "PED-2024-002",
-      status: "confirmado"
+      status: "confirmado",
+      releaseId: "2",
+      created_by: null
     },
     {
       id: 3,
@@ -145,11 +164,13 @@ const Agendamentos = () => {
       motorista: "Pedro Costa",
       documento: "456.789.123-00",
       pedido: "PED-2024-005",
-      status: "pendente"
+      status: "pendente",
+      releaseId: "3",
+      created_by: null
     },
   ]);
 
-  // Dialog & form
+  /* Estado do diálogo Novo Agendamento (já existente) */
   const [dialogOpen, setDialogOpen] = useState(false);
   const [releasesOptions, setReleasesOptions] = useState<ReleaseOption[]>([]);
   const [loadingReleases, setLoadingReleases] = useState(false);
@@ -175,13 +196,9 @@ const Agendamentos = () => {
           .select("id, pedido, cliente, quantidade, quantidade_retirada, status, product_id");
         if (error) throw error;
 
-        // Filtra apenas pendente/parcial
         const filtered = (data || []).filter(
           (r: any) => ["pendente", "parcial"].includes(r.status)
         );
-
-        // Opcional: buscar nome do produto (se não vier)
-        // Para simplicidade, mantemos sem nova consulta; produto pode ser obtido localmente depois se a tabela tiver.
         setReleasesOptions(filtered as ReleaseOption[]);
       } catch {
         toast({
@@ -204,7 +221,6 @@ const Agendamentos = () => {
 
   const maxQuantity = selectedRelease ? remainingForRelease(selectedRelease) : 0;
 
-  // Exibir label de liberação no select
   const releaseLabel = (r: ReleaseOption) => {
     const restante = remainingForRelease(r);
     return `[${r.pedido}] ${r.produto || "Produto"} — ${r.cliente} (restante: ${restante})`;
@@ -224,6 +240,7 @@ const Agendamentos = () => {
     });
   };
 
+  /* Salvar Novo Agendamento (mantido) */
   const handleSave = async () => {
     if (!canCreate) {
       toast({
@@ -234,7 +251,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Validações básicas
     if (
       !form.releaseId ||
       !form.date ||
@@ -253,7 +269,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Data não pode ser passada
     if (form.date < todayStr()) {
       toast({
         variant: "destructive",
@@ -282,7 +297,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // CPF
     if (!isValidCPF(form.driverCPF)) {
       toast({
         variant: "destructive",
@@ -292,7 +306,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Placa
     if (!isValidPlate(form.truckPlate)) {
       toast({
         variant: "destructive",
@@ -302,16 +315,14 @@ const Agendamentos = () => {
       return;
     }
 
-    // Preparar dados para inserção
     const release = selectedRelease;
     const pedido = release?.pedido || "PED-XXXX-0000";
     const produto = release?.produto || "Produto";
     const cliente = release?.cliente || "Cliente";
-    const dataBR = formatDateBR(form.date);
+    const dataBR = formatDateBRFromISO(form.date);
 
     const novoIdLocal = Math.max(0, ...agendamentos.map((a) => a.id)) + 1;
 
-    // Atualiza lista local primeiro
     const novoAgendamento: AgendamentoItem = {
       id: novoIdLocal,
       cliente,
@@ -324,10 +335,11 @@ const Agendamentos = () => {
       documento: form.driverCPF,
       pedido,
       status: "confirmado",
+      releaseId: form.releaseId,
+      created_by: user?.id ?? null,
     };
     setAgendamentos((prev) => [novoAgendamento, ...prev]);
 
-    // Tenta persistir
     try {
       const isoDateTime = `${form.date}T${form.time}:00.000Z`;
       const { error } = await supabase.from("agendamentos").insert([
@@ -350,7 +362,8 @@ const Agendamentos = () => {
         toast({
           variant: "destructive",
           title: "Persistência pendente",
-            description: "Não foi possível salvar no banco agora. O agendamento foi criado localmente; aplique as migrations e tente novamente depois.",
+          description:
+            "Não foi possível salvar no banco agora. O agendamento foi criado localmente; aplique as migrations e tente novamente depois.",
         });
       } else {
         toast({
@@ -369,6 +382,248 @@ const Agendamentos = () => {
 
     resetForm();
     setDialogOpen(false);
+  };
+
+  /* Botão Editar: permissões e diálogo */
+  const canEdit = (a: AgendamentoItem) => {
+    if (a.status === "concluido" || a.status === "cancelado") return false;
+    const isOwner = a.created_by && user?.id && a.created_by === user.id;
+    return Boolean(isOwner || hasRole("admin") || hasRole("logistica"));
+  };
+
+  const [editOpen, setEditOpen] = useState(false);
+  const [editItem, setEditItem] = useState<AgendamentoItem | null>(null);
+  const [editForm, setEditForm] = useState({
+    id: 0,
+    releaseId: "" as string | number,
+    date: todayStr(),
+    time: "",
+    quantity: "",
+    driverName: "",
+    driverCPF: "",
+    truckPlate: "",
+    truckType: "",
+    notes: "",
+    originalQty: 0,
+    originalStatus: "" as AgendamentoStatus,
+    createdBy: "" as string | null,
+  });
+
+  const openEdit = (a: AgendamentoItem) => {
+    if (!canEdit(a)) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Apenas o criador, Admin ou Logística podem editar este agendamento.",
+      });
+      return;
+    }
+    const isoDate = parseDateBRtoISO(a.data);
+    setEditItem(a);
+    setEditForm({
+      id: a.id,
+      releaseId: a.releaseId ?? "",
+      date: isoDate,
+      time: a.horario,
+      quantity: String(a.quantidade),
+      driverName: a.motorista,
+      driverCPF: a.documento,
+      truckPlate: a.placa,
+      truckType: "", // manter vazio caso não exista no mock
+      notes: "",
+      originalQty: a.quantidade,
+      originalStatus: a.status,
+      createdBy: a.created_by ?? null,
+    });
+    setEditOpen(true);
+  };
+
+  /* Função: recalcular quantidade_retirada na liberação */
+  const recalcLiberacaoRetirada = async (releaseId: string | number) => {
+    try {
+      const { data: ags, error } = await supabase
+        .from("agendamentos")
+        .select("quantidade, status")
+        .eq("release_id", releaseId);
+
+      if (error) throw error;
+
+      // Contabiliza retiradas de agendamentos com status que indicam retirada realizada
+      const retiradaStatuses = ["carregado", "entregue", "concluido"];
+      const totalRetirado = (ags || []).reduce((sum: number, row: any) => {
+        const st = String(row.status || "").toLowerCase();
+        if (retiradaStatuses.includes(st)) {
+          return sum + Number(row.quantidade || 0);
+        }
+        return sum;
+      }, 0);
+
+      const { error: upErr } = await supabase
+        .from("liberacoes")
+        .update({ quantidade_retirada: totalRetirado, updated_at: new Date().toISOString() })
+        .eq("id", releaseId);
+
+      if (upErr) throw upErr;
+    } catch {
+      // Apenas informa; não bloqueia o fluxo
+      toast({
+        variant: "destructive",
+        title: "Recalcular retirada pendente",
+        description:
+          "Não foi possível atualizar a quantidade retirada na liberação agora. Aplique as migrations e tente novamente depois.",
+      });
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editItem) return;
+
+    // Revalidar permissões
+    if (!canEdit(editItem)) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Você não pode editar este agendamento.",
+      });
+      return;
+    }
+
+    // Bloquear para concluído/cancelado
+    if (editForm.originalStatus === "concluido" || editForm.originalStatus === "cancelado") {
+      toast({
+        variant: "destructive",
+        title: "Edição não permitida",
+        description: "Agendamentos concluídos ou cancelados não podem ser editados.",
+      });
+      return;
+    }
+
+    // Validações iguais ao criar
+    if (!editForm.date || !editForm.time || !editForm.quantity || !editForm.driverName.trim() || !editForm.driverCPF || !editForm.truckPlate) {
+      toast({
+        variant: "destructive",
+        title: "Campos obrigatórios",
+        description: "Preencha todos os campos obrigatórios do formulário.",
+      });
+      return;
+    }
+
+    if (editForm.date < todayStr()) {
+      toast({
+        variant: "destructive",
+        title: "Data inválida",
+        description: "A data de retirada não pode ser anterior a hoje.",
+      });
+      return;
+    }
+
+    const newQty = Number(editForm.quantity);
+    if (Number.isNaN(newQty) || newQty <= 0) {
+      toast({
+        variant: "destructive",
+        title: "Quantidade inválida",
+        description: "Informe uma quantidade maior que zero.",
+      });
+      return;
+    }
+
+    // Checagem de disponível considerando edição (devolve a quantidade original)
+    if (editForm.releaseId) {
+      const rel = releasesOptions.find((r) => String(r.id) === String(editForm.releaseId));
+      if (rel) {
+        const restante = remainingForRelease(rel);
+        const maxAllowed = restante + Number(editForm.originalQty || 0);
+        if (newQty > maxAllowed) {
+          toast({
+            variant: "destructive",
+            title: "Quantidade excede disponível",
+            description: `A quantidade informada ultrapassa o restante permitido (${maxAllowed}).`,
+          });
+          return;
+        }
+      }
+    }
+
+    if (!isValidCPF(editForm.driverCPF)) {
+      toast({
+        variant: "destructive",
+        title: "CPF inválido",
+        description: "Verifique o CPF do motorista.",
+      });
+      return;
+    }
+
+    if (!isValidPlate(editForm.truckPlate)) {
+      toast({
+        variant: "destructive",
+        title: "Placa inválida",
+        description: "Formato deve ser AAA-9999 ou AAA9A99.",
+      });
+      return;
+    }
+
+    // Atualizar localmente
+    setAgendamentos((prev) =>
+      prev.map((a) =>
+        a.id === editForm.id
+          ? {
+              ...a,
+              quantidade: newQty,
+              data: formatDateBRFromISO(editForm.date),
+              horario: editForm.time,
+              motorista: editForm.driverName.trim(),
+              documento: editForm.driverCPF,
+              placa: editForm.truckPlate.toUpperCase(),
+              // truckType/notes não existem no mock de exibição; ficam persistidos apenas no banco
+            }
+          : a
+      )
+    );
+
+    // Persistir no backend
+    try {
+      const isoDateTime = `${editForm.date}T${editForm.time}:00.000Z`;
+      const { error } = await supabase
+        .from("agendamentos")
+        .update({
+          data_hora: isoDateTime,
+          quantidade: newQty,
+          motorista_nome: editForm.driverName.trim(),
+          motorista_cpf: editForm.driverCPF.replace(/\D/g, ""),
+          placa_caminhao: editForm.truckPlate.toUpperCase(),
+          tipo_caminhao: editForm.truckType || null,
+          observacoes: editForm.notes || null,
+          updated_by: user?.id ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", editForm.id);
+
+      if (error) {
+        toast({
+          variant: "destructive",
+          title: "Persistência pendente",
+          description:
+            "Não foi possível atualizar no banco agora. A alteração local foi mantida; aplique as migrations e tente novamente depois.",
+        });
+      } else {
+        toast({ title: "Agendamento atualizado", description: "As alterações foram salvas com sucesso." });
+      }
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Persistência pendente",
+        description:
+          "Não foi possível atualizar no banco agora. A alteração local foi mantida; aplique as migrations e tente novamente depois.",
+      });
+    }
+
+    // Se quantidade alterou, recalcular quantidade_retirada na liberação
+    if (editForm.releaseId && newQty !== Number(editForm.originalQty || 0)) {
+      await recalcLiberacaoRetirada(editForm.releaseId);
+    }
+
+    setEditOpen(false);
+    setEditItem(null);
   };
 
   return (
@@ -407,7 +662,7 @@ const Agendamentos = () => {
                     <SelectContent>
                       {releasesOptions.map((r) => (
                         <SelectItem key={r.id} value={String(r.id)}>
-                          {releaseLabel(r)}
+                          {`[${r.pedido}] ${r.produto || "Produto"} — ${r.cliente} (restante: ${remainingForRelease(r)})`}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -524,57 +779,191 @@ const Agendamentos = () => {
 
       <div className="container mx-auto px-6 py-8">
         <div className="grid gap-4">
-          {agendamentos.map((agend) => (
-            <Card key={agend.id} className="transition-all hover:shadow-md">
-              <CardContent className="p-6">
-                <div className="space-y-4">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-start gap-4">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-primary">
-                        <Calendar className="h-6 w-6 text-white" />
+          {agendamentos.map((agend) => {
+            const disabledByStatus = agend.status === "concluido" || agend.status === "cancelado";
+            const allowed = canEdit(agend);
+            const disableEdit = disabledByStatus || !allowed;
+            const titleEdit = disabledByStatus
+              ? "Agendamento concluído/cancelado não pode ser editado"
+              : !allowed
+                ? "Apenas criador, Admin ou Logística podem editar"
+                : "Editar agendamento";
+
+            return (
+              <Card key={agend.id} className="transition-all hover:shadow-md">
+                <CardContent className="p-6">
+                  <div className="space-y-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start gap-4">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-primary">
+                          <Calendar className="h-6 w-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-foreground">{agend.cliente}</h3>
+                          <p className="text-sm text-muted-foreground">
+                            {agend.produto} - {agend.quantidade}t
+                          </p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Pedido: <span className="font-medium text-foreground">{agend.pedido}</span>
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-semibold text-foreground">{agend.cliente}</h3>
-                        <p className="text-sm text-muted-foreground">
-                          {agend.produto} - {agend.quantidade}t
-                        </p>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Pedido: <span className="font-medium text-foreground">{agend.pedido}</span>
-                        </p>
+
+                      <div className="flex items-center gap-2">
+                        <Badge variant={agend.status === "confirmado" ? "default" : "secondary"}>
+                          {agend.status === "confirmado" ? "Confirmado" : agend.status.charAt(0).toUpperCase() + agend.status.slice(1)}
+                        </Badge>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openEdit(agend)}
+                          disabled={disableEdit}
+                          title={titleEdit}
+                        >
+                          <Pencil className="h-4 w-4 mr-2" />
+                          Editar
+                        </Button>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-4">
-                      <Badge variant={agend.status === "confirmado" ? "default" : "secondary"}>
-                        {agend.status === "confirmado" ? "Confirmado" : "Pendente"}
-                      </Badge>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-muted-foreground" />
+                        <span>{agend.data} às {agend.horario}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Truck className="h-4 w-4 text-muted-foreground" />
+                        <span>{agend.placa}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <User className="h-4 w-4 text-muted-foreground" />
+                        <span>{agend.motorista}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <User className="h-4 w-4 text-muted-foreground" />
+                        <span>{agend.documento}</span>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4 text-muted-foreground" />
-                      <span>{agend.data} às {agend.horario}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Truck className="h-4 w-4 text-muted-foreground" />
-                      <span>{agend.placa}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-muted-foreground" />
-                      <span>{agend.motorista}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-muted-foreground" />
-                      <span>{agend.documento}</span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       </div>
+
+      {/* Dialog Editar Agendamento */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar Agendamento</DialogTitle>
+          </DialogHeader>
+
+          {editItem ? (
+            <div className="space-y-4 py-2">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_date">Data de Retirada</Label>
+                  <Input
+                    id="edit_date"
+                    type="date"
+                    value={editForm.date}
+                    min={todayStr()}
+                    onChange={(e) => setEditForm((s) => ({ ...s, date: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_time">Horário</Label>
+                  <Input
+                    id="edit_time"
+                    type="time"
+                    value={editForm.time}
+                    onChange={(e) => setEditForm((s) => ({ ...s, time: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_quantity">Quantidade</Label>
+                  <Input
+                    id="edit_quantity"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editForm.quantity}
+                    onChange={(e) => setEditForm((s) => ({ ...s, quantity: e.target.value }))}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_driverName">Nome do Motorista</Label>
+                  <Input
+                    id="edit_driverName"
+                    value={editForm.driverName}
+                    onChange={(e) => setEditForm((s) => ({ ...s, driverName: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_driverCPF">CPF do Motorista</Label>
+                  <Input
+                    id="edit_driverCPF"
+                    value={editForm.driverCPF}
+                    onChange={(e) => setEditForm((s) => ({ ...s, driverCPF: maskCPF(e.target.value) }))}
+                    placeholder="000.000.000-00"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2 md:col-span-2">
+                  <Label htmlFor="edit_truckPlate">Placa do Caminhão</Label>
+                  <Input
+                    id="edit_truckPlate"
+                    value={editForm.truckPlate}
+                    onChange={(e) => setEditForm((s) => ({ ...s, truckPlate: maskPlate(e.target.value) }))}
+                    placeholder="ABC-1234 ou ABC1D23"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_truckType">Tipo de Caminhão</Label>
+                  <Select
+                    value={editForm.truckType}
+                    onValueChange={(v) => setEditForm((s) => ({ ...s, truckType: v }))}
+                  >
+                    <SelectTrigger id="edit_truckType">
+                      <SelectValue placeholder="Selecione" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Carreta">Carreta</SelectItem>
+                      <SelectItem value="Truck">Truck</SelectItem>
+                      <SelectItem value="Toco">Toco</SelectItem>
+                      <SelectItem value="VUC">VUC</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="edit_notes">Observações (opcional)</Label>
+                <Textarea
+                  id="edit_notes"
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm((s) => ({ ...s, notes: e.target.value }))}
+                />
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditOpen(false)}>
+                  Cancelar
+                </Button>
+                <Button className="bg-gradient-primary" onClick={handleSaveEdit}>
+                  Salvar
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
