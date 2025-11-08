@@ -3,38 +3,40 @@ import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Plus, ClipboardList } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
-type Unidade = "t" | "kg";
-type StatusLib = "pendente" | "parcial" | "concluido";
-
-interface ProdutoOption {
-  id: string;
-  nome: string;
-  unidade?: Unidade | null;
-}
-
-interface ArmazemOption {
-  id: string;
-  nome: string;
-}
+type StatusLib = "pendente" | "parcial" | "concluido" | "cancelado";
 
 interface LiberacaoItem {
   id: number;
   produto: string;
   cliente: string;
   quantidade: number;
-  quantidadeRetirada: number;
+  quantidadeRetirada: number; // usado como fallback se não houver agendamentos
   pedido: string;
   data: string; // dd/mm/yyyy
   status: StatusLib;
+  // campos opcionais caso existam no futuro:
+  armazem?: string;
+  warehouse_id?: string;
+  product_id?: string;
+}
+
+interface ScheduleItem {
+  id: string | number;
+  release_id: string | number | null;
+  quantidade: number;
+  status: string;
+  data_hora?: string | null;
+}
+
+interface WithdrawalEntry {
+  data: string;
+  quantidade: number;
 }
 
 const formatDateBR = (d = new Date()) => {
@@ -44,20 +46,6 @@ const formatDateBR = (d = new Date()) => {
   return `${dd}/${mm}/${yyyy}`;
 };
 
-const pedidoRegex = /^PED-\d{4}-\d{4}$/;
-
-const getStatusColor = (status: StatusLib) => {
-  switch (status) {
-    case "concluido":
-      return "default";
-    case "parcial":
-      return "secondary";
-    case "pendente":
-    default:
-      return "outline";
-  }
-};
-
 const getStatusText = (status: StatusLib) => {
   switch (status) {
     case "concluido":
@@ -65,17 +53,37 @@ const getStatusText = (status: StatusLib) => {
     case "parcial":
       return "Parcial";
     case "pendente":
-    default:
       return "Pendente";
+    case "cancelado":
+      return "Cancelado";
+    default:
+      return status;
+  }
+};
+
+const getStatusBadgeClasses = (status: StatusLib) => {
+  switch (status) {
+    case "pendente":
+      return "bg-yellow-500 text-white";
+    case "parcial":
+      return "bg-blue-500 text-white";
+    case "concluido":
+      return "bg-green-600 text-white";
+    case "cancelado":
+      return "bg-red-600 text-white";
+    default:
+      return "bg-secondary text-secondary-foreground";
   }
 };
 
 const Liberacoes = () => {
   const { toast } = useToast();
   const { hasRole, user } = useAuth();
-  const canCreate = hasRole("logistica") || hasRole("admin");
 
-  // Lista inicial mockada (mantida) + estado
+  const canCreate = hasRole("logistica") || hasRole("admin");
+  const canViewDetails = hasRole("admin") || hasRole("logistica") || hasRole("armazem");
+  const canCancel = hasRole("logistica") || hasRole("admin");
+
   const [liberacoes, setLiberacoes] = useState<LiberacaoItem[]>([
     { id: 1, produto: "Ureia", cliente: "Cliente ABC Ltda", quantidade: 10.0, quantidadeRetirada: 6.0, pedido: "PED-2024-001", data: "15/01/2024", status: "parcial" },
     { id: 2, produto: "NPK 20-05-20", cliente: "Transportadora XYZ", quantidade: 15.0, quantidadeRetirada: 0, pedido: "PED-2024-002", data: "16/01/2024", status: "pendente" },
@@ -83,194 +91,126 @@ const Liberacoes = () => {
     { id: 4, produto: "MAP", cliente: "Agro Tech", quantidade: 8.5, quantidadeRetirada: 0, pedido: "PED-2024-004", data: "16/01/2024", status: "pendente" },
   ]);
 
-  // Dialog e formulário
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState({
-    cliente: "",
-    produtoId: "",
-    armazemId: "",
-    quantidade: "",
-    unidade: "t" as Unidade,
-    pedido: "",
-  });
+  // Diálogo de detalhes
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [selectedRelease, setSelectedRelease] = useState<LiberacaoItem | null>(null);
+  const [relatedSchedules, setRelatedSchedules] = useState<ScheduleItem[]>([]);
+  const [withdrawHistory, setWithdrawHistory] = useState<WithdrawalEntry[]>([]);
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
-  // Opções carregadas
-  const [produtos, setProdutos] = useState<ProdutoOption[]>([]);
-  const [armazens, setArmazens] = useState<ArmazemOption[]>([]);
-  const [loadingOptions, setLoadingOptions] = useState(false);
-
-  useEffect(() => {
-    const loadOptions = async () => {
-      setLoadingOptions(true);
-      try {
-        // Carregar produtos
-        const { data: productsData, error: prodErr } = await supabase
-          .from("products")
-          .select("id, nome, unidade");
-        if (prodErr) throw prodErr;
-        setProdutos((productsData || []) as ProdutoOption[]);
-
-        // Carregar armazéns
-        const { data: whData, error: whErr } = await supabase
-          .from("warehouses")
-          .select("id, nome");
-        if (whErr) throw whErr;
-        setArmazens((whData || []) as ArmazemOption[]);
-      } catch {
-        toast({
-          variant: "destructive",
-          title: "Falha ao carregar opções",
-          description: "Não foi possível carregar produtos e armazéns agora.",
-        });
-      } finally {
-        setLoadingOptions(false);
-      }
-    };
-    loadOptions();
-  }, [toast]);
-
-  const produtoSelecionado = useMemo(
-    () => produtos.find((p) => p.id === form.produtoId) || null,
-    [produtos, form.produtoId]
-  );
-
-  // Se o produto tem unidade definida, usar como sugestão
-  useEffect(() => {
-    if (produtoSelecionado?.unidade) {
-      setForm((s) => ({ ...s, unidade: produtoSelecionado.unidade as Unidade }));
-    }
-  }, [produtoSelecionado]);
-
-  const resetForm = () => {
-    setForm({
-      cliente: "",
-      produtoId: "",
-      armazemId: "",
-      quantidade: "",
-      unidade: "t",
-      pedido: "",
-    });
-  };
-
-  const checkStockSuficiente = async (productId: string, warehouseId: string, qty: number) => {
-    try {
-      const { data, error } = await supabase
-        .from("stock_balances")
-        .select("quantidade_atual")
-        .eq("product_id", productId)
-        .eq("warehouse_id", warehouseId);
-
-      if (error) throw error;
-      const totalDisponivel =
-        (data || []).reduce((sum: number, row: any) => sum + Number(row.quantidade_atual || 0), 0);
-      return totalDisponivel >= qty;
-    } catch {
-      // Se não conseguimos validar, retornamos null para indicar indeterminado
-      return null as unknown as boolean;
-    }
-  };
-
-  const handleSave = async () => {
-    if (!canCreate) {
+  const openDetails = async (lib: LiberacaoItem) => {
+    if (!canViewDetails) {
       toast({
         variant: "destructive",
         title: "Permissão insuficiente",
-        description: "Apenas Logística ou Admin podem criar liberações.",
+        description: "Apenas Admin, Logística ou Armazém podem visualizar detalhes.",
       });
       return;
     }
 
-    // Validações
-    if (!form.cliente.trim() || !form.produtoId || !form.armazemId || !form.quantidade || !form.pedido.trim()) {
+    setSelectedRelease(lib);
+    setDetailsOpen(true);
+    setLoadingDetails(true);
+
+    // Busca agendamentos relacionados: tenta 'agendamentos', depois 'schedules'
+    let schedules: ScheduleItem[] = [];
+    try {
+      let resp = await supabase
+        .from("agendamentos")
+        .select("id, release_id, quantidade, status, data_hora")
+        .eq("release_id", lib.id);
+      if (resp.error) throw resp.error;
+      schedules = (resp.data || []) as unknown as ScheduleItem[];
+    } catch {
+      try {
+        const resp2 = await supabase
+          .from("schedules")
+          .select("id, release_id, quantidade, status, data_hora")
+          .eq("release_id", lib.id);
+        if (!resp2.error) {
+          schedules = (resp2.data || []) as unknown as ScheduleItem[];
+        }
+      } catch {
+        // fallback vazio
+      }
+    }
+
+    setRelatedSchedules(schedules);
+
+    // Histórico de retiradas e total retirado a partir dos agendamentos
+    const withdrawnStatuses = ["carregado", "entregue", "concluido"];
+    const hist: WithdrawalEntry[] = schedules
+      .filter((s) => withdrawnStatuses.includes((s.status || "").toLowerCase()))
+      .map((s) => ({
+        data: s.data_hora ? formatDateBR(new Date(s.data_hora)) : "-",
+        quantidade: Number(s.quantidade || 0),
+      }));
+    setWithdrawHistory(hist);
+
+    setLoadingDetails(false);
+  };
+
+  const totalRetiradoCalculado = useMemo(() => {
+    if (!withdrawHistory.length) return null;
+    return withdrawHistory.reduce((sum, w) => sum + (Number(w.quantidade) || 0), 0);
+  }, [withdrawHistory]);
+
+  const quantidadeRestante = useMemo(() => {
+    if (!selectedRelease) return 0;
+    const retirado = totalRetiradoCalculado ?? Number(selectedRelease.quantidadeRetirada || 0);
+    return Math.max(0, Number(selectedRelease.quantidade || 0) - retirado);
+  }, [selectedRelease, totalRetiradoCalculado]);
+
+  const handleCancelRelease = async () => {
+    if (!selectedRelease) return;
+    if (!canCancel) {
       toast({
         variant: "destructive",
-        title: "Campos obrigatórios",
-        description: "Preencha Cliente, Produto, Armazém, Quantidade e Pedido.",
+        title: "Permissão insuficiente",
+        description: "Apenas Logística ou Admin podem cancelar liberações.",
       });
       return;
     }
-
-    const qtd = Number(form.quantidade);
-    if (Number.isNaN(qtd) || qtd <= 0) {
+    if (!["pendente", "parcial"].includes(selectedRelease.status)) {
       toast({
         variant: "destructive",
-        title: "Quantidade inválida",
-        description: "A quantidade deve ser um número maior que zero.",
+        title: "Ação indisponível",
+        description: "A liberação não está em estado que permita cancelamento.",
       });
       return;
     }
 
-    if (!pedidoRegex.test(form.pedido)) {
-      toast({
-        variant: "destructive",
-        title: "Pedido inválido",
-        description: 'Use o formato "PED-YYYY-NNNN", por exemplo PED-2025-0001.',
-      });
-      return;
-    }
+    const ok = window.confirm("Tem certeza que deseja cancelar esta liberação?");
+    if (!ok) return;
 
-    // Checar estoque suficiente
-    const estoqueOk = await checkStockSuficiente(form.produtoId, form.armazemId, qtd);
-    if (estoqueOk === false) {
-      toast({
-        variant: "destructive",
-        title: "Estoque insuficiente",
-        description: "Não há saldo suficiente no armazém selecionado para a quantidade informada.",
-      });
-      return;
-    } else if (estoqueOk === null) {
-      // Indeterminado (tabela ausente / erro). Avisar e seguir com inserção local + tentativa de persistência.
-      toast({
-        title: "Validação de estoque indisponível",
-        description: "Não foi possível validar o estoque agora. Prosseguindo com a criação (local) e tentativa de salvar no banco.",
-      });
-    }
+    // Atualização local imediata
+    setLiberacoes((prev) =>
+      prev.map((l) => (l.id === selectedRelease.id ? { ...l, status: "cancelado" as StatusLib } : l))
+    );
+    setSelectedRelease((s) => (s ? { ...s, status: "cancelado" } : s));
 
-    const nomeProduto = produtos.find((p) => p.id === form.produtoId)?.nome || "Produto";
-    const dataHoje = formatDateBR(new Date());
-
-    // Atualiza lista local imediatamente
-    const novoIdLocal = Math.max(0, ...liberacoes.map((l) => l.id)) + 1;
-    const novaLibLocal: LiberacaoItem = {
-      id: novoIdLocal,
-      produto: nomeProduto,
-      cliente: form.cliente.trim(),
-      quantidade: qtd,
-      quantidadeRetirada: 0,
-      pedido: form.pedido.trim(),
-      data: dataHoje,
-      status: "pendente",
-    };
-    setLiberacoes((prev) => [novaLibLocal, ...prev]);
+    toast({
+      title: "Liberação cancelada",
+      description: `Pedido ${selectedRelease.pedido} foi marcado como cancelado.`,
+    });
 
     // Tenta persistir no backend
     try {
-      const { error } = await supabase.from("liberacoes").insert([
-        {
-          cliente: form.cliente.trim(),
-          product_id: form.produtoId,
-          warehouse_id: form.armazemId,
-          quantidade: qtd,
-          unidade: form.unidade,
-          pedido: form.pedido.trim(),
-          status: "pendente",
-          quantidade_retirada: 0,
-          created_by: user?.id ?? null,
-          created_at: new Date().toISOString(),
-        },
-      ]);
+      const { error } = await supabase
+        .from("liberacoes")
+        .update({
+          status: "cancelado",
+          cancelled_at: new Date().toISOString(),
+          cancelled_by: user?.id ?? null,
+        })
+        .eq("id", selectedRelease.id);
 
       if (error) {
         toast({
           variant: "destructive",
           title: "Persistência pendente",
           description:
-            "Não foi possível salvar no banco agora. A liberação foi criada localmente; aplique as migrations e tente novamente depois.",
-        });
-      } else {
-        toast({
-          title: "Liberação criada",
-          description: `Produto ${nomeProduto} liberado para ${form.cliente}.`,
+            "Não foi possível salvar o cancelamento no banco agora. A alteração local foi mantida. Aplique as migrations e tente novamente.",
         });
       }
     } catch {
@@ -278,12 +218,9 @@ const Liberacoes = () => {
         variant: "destructive",
         title: "Persistência pendente",
         description:
-          "Não foi possível salvar no banco agora. A liberação foi criada localmente; aplique as migrations e tente novamente depois.",
+          "Não foi possível salvar o cancelamento no banco agora. A alteração local foi mantida. Aplique as migrations e tente novamente.",
       });
     }
-
-    resetForm();
-    setDialogOpen(false);
   };
 
   return (
@@ -292,126 +229,10 @@ const Liberacoes = () => {
         title="Liberações de Produtos"
         description="Gerencie as liberações de produtos para clientes"
         actions={
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button
-                className="bg-gradient-primary"
-                disabled={!canCreate}
-                title={!canCreate ? "Apenas Logística ou Admin podem criar liberações" : "Nova Liberação"}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Nova Liberação
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Nova Liberação</DialogTitle>
-              </DialogHeader>
-
-              <div className="space-y-4 py-2">
-                <div className="space-y-2">
-                  <Label htmlFor="cliente">Cliente (nome completo)</Label>
-                  <Input
-                    id="cliente"
-                    value={form.cliente}
-                    onChange={(e) => setForm((s) => ({ ...s, cliente: e.target.value }))}
-                    placeholder="Ex.: Cliente ABC Ltda"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="produto">Produto</Label>
-                    <Select
-                      value={form.produtoId}
-                      onValueChange={(v) => setForm((s) => ({ ...s, produtoId: v }))}
-                      disabled={loadingOptions}
-                    >
-                      <SelectTrigger id="produto">
-                        <SelectValue placeholder={loadingOptions ? "Carregando..." : "Selecione o produto"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {produtos.map((p) => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.nome}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="armazem">Armazém</Label>
-                    <Select
-                      value={form.armazemId}
-                      onValueChange={(v) => setForm((s) => ({ ...s, armazemId: v }))}
-                      disabled={loadingOptions}
-                    >
-                      <SelectTrigger id="armazem">
-                        <SelectValue placeholder={loadingOptions ? "Carregando..." : "Selecione o armazém"} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {armazens.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.nome}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="quantidade">Quantidade Liberada</Label>
-                    <Input
-                      id="quantidade"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.quantidade}
-                      onChange={(e) => setForm((s) => ({ ...s, quantidade: e.target.value }))}
-                      placeholder="Ex.: 10.5"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="unidade">Unidade</Label>
-                    <Select
-                      value={form.unidade}
-                      onValueChange={(v) => setForm((s) => ({ ...s, unidade: v as Unidade }))}
-                    >
-                      <SelectTrigger id="unidade">
-                        <SelectValue placeholder="Selecione a unidade" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="t">Toneladas (t)</SelectItem>
-                        <SelectItem value="kg">Quilos (kg)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="pedido">Número do Pedido Interno</Label>
-                  <Input
-                    id="pedido"
-                    value={form.pedido}
-                    onChange={(e) => setForm((s) => ({ ...s, pedido: e.target.value.toUpperCase() }))}
-                    placeholder="Ex.: PED-2025-0001"
-                  />
-                </div>
-              </div>
-
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                  Cancelar
-                </Button>
-                <Button className="bg-gradient-primary" onClick={handleSave}>
-                  Salvar
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          <Button className="bg-gradient-primary" disabled={!canCreate} title={!canCreate ? "Apenas Logística ou Admin" : "Nova Liberação"}>
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Liberação
+          </Button>
         }
       />
 
@@ -438,8 +259,19 @@ const Liberacoes = () => {
                       <p className="mt-1 text-sm text-muted-foreground">Data: {lib.data}</p>
                     </div>
                   </div>
-                  <div>
-                    <Badge variant={getStatusColor(lib.status)}>{getStatusText(lib.status)}</Badge>
+                  <div className="flex items-center gap-3">
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusBadgeClasses(lib.status)}`}>
+                      {getStatusText(lib.status)}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openDetails(lib)}
+                      disabled={!canViewDetails}
+                      title={!canViewDetails ? "Apenas Admin/Logística/Armazém" : "Ver detalhes"}
+                    >
+                      Detalhes
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -447,6 +279,138 @@ const Liberacoes = () => {
           ))}
         </div>
       </div>
+
+      {/* Dialog de Detalhes */}
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              Detalhes da Liberação {selectedRelease ? `— ${selectedRelease.produto} (${selectedRelease.pedido})` : ""}
+            </DialogTitle>
+          </DialogHeader>
+
+          {loadingDetails ? (
+            <div className="py-6 text-sm text-muted-foreground">Carregando detalhes...</div>
+          ) : selectedRelease ? (
+            <div className="space-y-6">
+              {/* Informações Gerais */}
+              <section className="space-y-2">
+                <h4 className="font-medium">Informações Gerais</h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Produto: </span>
+                    <span className="text-foreground font-medium">{selectedRelease.produto}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Cliente: </span>
+                    <span className="text-foreground font-medium">{selectedRelease.cliente}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Armazém: </span>
+                    <span className="text-foreground font-medium">{selectedRelease.armazem || "-"}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Pedido: </span>
+                    <span className="text-foreground font-medium">{selectedRelease.pedido}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Data de Liberação: </span>
+                    <span className="text-foreground font-medium">{selectedRelease.data}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Status: </span>
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${getStatusBadgeClasses(selectedRelease.status)}`}>
+                      {getStatusText(selectedRelease.status)}
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              {/* Quantidades */}
+              <section className="space-y-2">
+                <h4 className="font-medium">Quantidades</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Liberada: </span>
+                    <span className="font-medium text-foreground">{selectedRelease.quantidade}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Retirada: </span>
+                    <span className="font-medium text-foreground">
+                      {(totalRetiradoCalculado ?? selectedRelease.quantidadeRetirada) || 0}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Restante: </span>
+                    <span className="font-medium text-foreground">{quantidadeRestante}</span>
+                  </div>
+                </div>
+                {quantidadeRestante <= 0 && selectedRelease.status !== "concluido" && (
+                  <p className="text-xs text-muted-foreground">Liberação totalmente retirada.</p>
+                )}
+              </section>
+
+              {/* Agendamentos Relacionados */}
+              <section className="space-y-2">
+                <h4 className="font-medium">Agendamentos Relacionados</h4>
+                {relatedSchedules.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nenhum agendamento encontrado.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {relatedSchedules.map((ag) => (
+                      <div key={ag.id} className="text-sm flex items-center justify-between border rounded p-2">
+                        <div>
+                          <div>
+                            <span className="text-muted-foreground">Data/Hora: </span>
+                            <span className="text-foreground">
+                              {ag.data_hora ? new Date(ag.data_hora).toLocaleString() : "-"}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Quantidade: </span>
+                            <span className="text-foreground font-medium">{ag.quantidade}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <Badge variant="secondary">{String(ag.status || "").toUpperCase()}</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              {/* Histórico de Retiradas */}
+              <section className="space-y-2">
+                <h4 className="font-medium">Histórico de Retiradas</h4>
+                {withdrawHistory.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nenhuma retirada registrada.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {withdrawHistory.map((w, idx) => (
+                      <div key={idx} className="text-sm flex items-center justify-between border rounded p-2">
+                        <span>{w.data}</span>
+                        <span className="font-medium">{w.quantidade}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <DialogFooter>
+                {["pendente", "parcial"].includes(selectedRelease.status) && canCancel && (
+                  <Button variant="destructive" onClick={handleCancelRelease}>
+                    Cancelar Liberação
+                  </Button>
+                )}
+                <Button variant="outline" onClick={() => setDetailsOpen(false)}>
+                  Fechar
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
