@@ -1,109 +1,409 @@
-import { Package, TrendingUp, Clock, CheckCircle } from "lucide-react";
-import { PageHeader } from "@/components/PageHeader";
-import { StatCard } from "@/components/StatCard";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMemo } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useQuery } from "@tanstack/react-query";
 
-const Dashboard = () => {
-  const recentActivities = [
-    { id: 1, type: "Liberação", description: "10t de Ureia liberado para Cliente ABC", time: "2h atrás", status: "success" },
-    { id: 2, type: "Agendamento", description: "Retirada agendada - Placa XYZ1234", time: "4h atrás", status: "warning" },
-    { id: 3, type: "Carregamento", description: "Carregamento concluído - NF 12345", time: "5h atrás", status: "success" },
-    { id: 4, type: "Estoque", description: "Atualização de estoque - Armazém SP", time: "1d atrás", status: "info" },
-  ];
+// Helpers de data
+const startOfTodayISO = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+};
+const endOfTodayISO = () => {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d.toISOString();
+};
+const daysAgoISO = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString();
+};
+const toBRDate = (v: string | Date) => {
+  const d = typeof v === "string" ? new Date(v) : v;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+const onlyDateKey = (v: string) => {
+  const d = new Date(v);
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+};
+const lastNDays = (n: number) => {
+  const out: Date[] = [];
+  const today = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    d.setHours(0, 0, 0, 0);
+    out.push(d);
+  }
+  return out;
+};
 
-  const upcomingSchedules = [
-    { id: 1, client: "Cliente XYZ", product: "Ureia", quantity: "5t", time: "14:00", plate: "ABC1234" },
-    { id: 2, client: "Transportadora ABC", product: "NPK", quantity: "8t", time: "15:30", plate: "DEF5678" },
-    { id: 3, client: "Cliente 123", product: "Ureia", quantity: "12t", time: "16:00", plate: "GHI9012" },
-  ];
+// Gráfico de barras (SVG simples)
+function BarChart({
+  data,
+  height = 140,
+}: {
+  data: Array<{ label: string; value: number; color?: string }>;
+  height?: number;
+}) {
+  const max = Math.max(1, ...data.map((d) => d.value));
+  return (
+    <div className="space-y-2">
+      {data.map((d) => {
+        const pct = (d.value / max) * 100;
+        return (
+          <div key={d.label} className="space-y-1">
+            <div className="flex justify-between text-xs">
+              <span className="text-muted-foreground">{d.label}</span>
+              <span className="font-medium">{d.value}</span>
+            </div>
+            <div className="h-3 w-full rounded bg-muted/60">
+              <div
+                className="h-3 rounded"
+                style={{
+                  width: `${pct}%`,
+                  background: d.color || "linear-gradient(90deg, #4f46e5, #22d3ee)",
+                }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Gráfico de linha (SVG simples)
+function LineChart({
+  points,
+  height = 140,
+}: {
+  points: Array<{ xLabel: string; value: number }>;
+  height?: number;
+}) {
+  const width = 420;
+  const padding = 24;
+  const innerW = width - padding * 2;
+  const innerH = height - padding * 2;
+  const max = Math.max(1, ...points.map((p) => p.value));
+  const stepX = points.length > 1 ? innerW / (points.length - 1) : innerW;
+
+  const svgPoints = points.map((p, i) => {
+    const x = padding + i * stepX;
+    const y = padding + (1 - p.value / max) * innerH;
+    return `${x},${y}`;
+  }).join(" ");
 
   return (
-    <div className="min-h-screen bg-background">
-      <PageHeader
-        title="Dashboard"
-        description="Visão geral do sistema logístico"
-      />
+    <div className="w-full">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full">
+        <polyline
+          fill="none"
+          stroke="url(#grad1)"
+          strokeWidth="3"
+          points={svgPoints}
+        />
+        <defs>
+          <linearGradient id="grad1" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#4f46e5" />
+            <stop offset="100%" stopColor="#22d3ee" />
+          </linearGradient>
+        </defs>
+        {points.map((p, i) => {
+          const x = padding + i * stepX;
+          const y = padding + (1 - p.value / max) * innerH;
+          return <circle key={i} cx={x} cy={y} r="3" fill="#0ea5e9" />;
+        })}
+      </svg>
+      <div className="mt-2 grid grid-cols-7 gap-1 text-[10px] text-muted-foreground">
+        {points.map((p) => (
+          <div key={p.xLabel} className="text-center truncate">{p.xLabel}</div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
-      <div className="container mx-auto px-6 py-8">
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-          <StatCard
-            title="Produtos em Estoque"
-            value="156"
-            icon={Package}
-            variant="primary"
-            trend={{ value: "12% do mês passado", positive: true }}
-          />
-          <StatCard
-            title="Liberações Ativas"
-            value="23"
-            icon={TrendingUp}
-            variant="success"
-            trend={{ value: "5 novas hoje", positive: true }}
-          />
-          <StatCard
-            title="Agendamentos Hoje"
-            value="8"
-            icon={Clock}
-            variant="warning"
-          />
-          <StatCard
-            title="Carregamentos Concluídos"
-            value="45"
-            icon={CheckCircle}
-            variant="success"
-            trend={{ value: "8% acima da meta", positive: true }}
-          />
-        </div>
+const Dashboard = () => {
+  const { toast } = useToast();
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Atividades Recentes</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {recentActivities.map((activity) => (
-                  <div key={activity.id} className="flex items-start gap-4 rounded-lg border border-border p-4 transition-colors hover:bg-muted/50">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-foreground">{activity.type}</p>
-                        <Badge variant={activity.status === "success" ? "default" : activity.status === "warning" ? "secondary" : "outline"}>
-                          {activity.status}
-                        </Badge>
+  // Métricas principais (counts)
+  const { data: totalAtivas } = useQuery({
+    queryKey: ["liberacoes-ativas-count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("liberacoes")
+        .select("id", { count: "exact", head: true })
+        .in("status", ["pendente", "parcial"]);
+      if (error) throw error;
+      return count ?? 0;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const { data: agendamentosHoje } = useQuery({
+    queryKey: ["agendamentos-hoje-count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("agendamentos")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "confirmado")
+        .gte("data_hora", startOfTodayISO())
+        .lte("data_hora", endOfTodayISO());
+      if (error) throw error;
+      return count ?? 0;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const { data: carregandoCount } = useQuery({
+    queryKey: ["carregamentos-em-andamento-count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("carregamentos")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "em_andamento");
+      if (error) throw error;
+      return count ?? 0;
+    },
+    refetchInterval: 60_000,
+  });
+
+  const { data: baixoEstoqueCount } = useQuery({
+    queryKey: ["stock-baixo-count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("stock_balances")
+        .select("id", { count: "exact", head: true })
+        .lt("quantidade_atual", 10);
+      if (error) throw error;
+      return count ?? 0;
+    },
+    refetchInterval: 120_000,
+  });
+
+  // Gráfico: Liberações por Status (últimos 30 dias)
+  const { data: liberacoes30 } = useQuery({
+    queryKey: ["liberacoes-ult-30"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("liberacoes")
+        .select("id,status,created_at")
+        .gte("created_at", daysAgoISO(30));
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 120_000,
+  });
+  const barrasLiberacoes = useMemo(() => {
+    const base = { pendente: 0, parcial: 0, concluido: 0, cancelado: 0 } as Record<string, number>;
+    (liberacoes30 ?? []).forEach((l: any) => {
+      base[l.status] = (base[l.status] ?? 0) + 1;
+    });
+    return [
+      { label: "Pendente", value: base.pendente || 0, color: "linear-gradient(90deg,#f59e0b,#fbbf24)" },
+      { label: "Parcial", value: base.parcial || 0, color: "linear-gradient(90deg,#3b82f6,#60a5fa)" },
+      { label: "Concluído", value: base.concluido || 0, color: "linear-gradient(90deg,#10b981,#34d399)" },
+      { label: "Cancelado", value: base.cancelado || 0, color: "linear-gradient(90deg,#ef4444,#f87171)" },
+    ];
+  }, [liberacoes30]);
+
+  // Gráfico: Evolução de Carregamentos (últimos 7 dias) por criação
+  const { data: carregamentos7 } = useQuery({
+    queryKey: ["carregamentos-ult-7"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("carregamentos")
+        .select("id,created_at")
+        .gte("created_at", daysAgoISO(7));
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 120_000,
+  });
+  const linhaCarregamentos = useMemo(() => {
+    const days = lastNDays(7);
+    const counts: Record<string, number> = {};
+    days.forEach((d) => (counts[d.toISOString().slice(0, 10)] = 0));
+    (carregamentos7 ?? []).forEach((c: any) => {
+      const key = onlyDateKey(c.created_at);
+      if (counts[key] !== undefined) counts[key] += 1;
+    });
+    return days.map((d) => ({
+      xLabel: toBRDate(d),
+      value: counts[d.toISOString().slice(0, 10)] || 0,
+    }));
+  }, [carregamentos7]);
+
+  // Próximos Agendamentos (5 próximos)
+  const { data: proximosAg } = useQuery({
+    queryKey: ["proximos-agendamentos"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("agendamentos")
+        .select("id,cliente,quantidade,data_hora,pedido")
+        .gte("data_hora", new Date().toISOString())
+        .order("data_hora", { ascending: true })
+        .limit(5);
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 60_000,
+  });
+
+  // Alertas:
+  // - Estoque baixo (lista)
+  // - Liberações atrasadas: status pendente e created_at < hoje
+  const { data: lowStocks } = useQuery({
+    queryKey: ["stock-baixo-list"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("stock_balances")
+        .select("id,product_id,warehouse_id,quantidade_atual,updated_at")
+        .lt("quantidade_atual", 10)
+        .limit(20);
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 180_000,
+  });
+  const { data: atrasos } = useQuery({
+    queryKey: ["liberacoes-atrasadas"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("liberacoes")
+        .select("id,cliente,pedido,quantidade,quantidade_retirada,created_at,status")
+        .eq("status", "pendente")
+        .lt("created_at", startOfTodayISO())
+        .order("created_at", { ascending: true })
+        .limit(20);
+      if (error) throw error;
+      return data ?? [];
+    },
+    refetchInterval: 180_000,
+  });
+
+  // UI
+  return (
+    <div className="container mx-auto px-6 py-6">
+      <h1 className="text-2xl font-semibold mb-4">Dashboard</h1>
+
+      {/* Cards de estatísticas */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Liberações Ativas</div>
+            <div className="mt-1 text-3xl font-bold">{totalAtivas ?? 0}</div>
+            <div className="text-xs text-muted-foreground">Pendente + Parcial</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Agendamentos Hoje</div>
+            <div className="mt-1 text-3xl font-bold">{agendamentosHoje ?? 0}</div>
+            <div className="text-xs text-muted-foreground">Confirmados no dia</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Carregamentos em Andamento</div>
+            <div className="mt-1 text-3xl font-bold">{carregandoCount ?? 0}</div>
+            <div className="text-xs text-muted-foreground">Status em_andamento</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-sm text-muted-foreground">Alertas de Estoque Baixo</div>
+            <div className="mt-1 text-3xl font-bold">{baixoEstoqueCount ?? 0}</div>
+            <div className="text-xs text-muted-foreground">Quantidade atual &lt; 10</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Gráficos */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <Card>
+          <CardContent className="p-5">
+            <div className="mb-3 font-medium">Liberações por Status (últimos 30 dias)</div>
+            <BarChart data={barrasLiberacoes} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <div className="mb-3 font-medium">Evolução de Carregamentos (últimos 7 dias)</div>
+            <LineChart points={linhaCarregamentos} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Listas: Próximos Agendamentos e Alertas */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <Card>
+          <CardContent className="p-5">
+            <div className="mb-3 font-medium">Próximos Agendamentos</div>
+            <div className="space-y-2">
+              {(proximosAg ?? []).length === 0 && (
+                <div className="text-sm text-muted-foreground">Nenhum agendamento futuro.</div>
+              )}
+              {(proximosAg ?? []).map((a: any) => (
+                <div key={a.id} className="flex items-center justify-between rounded border p-2">
+                  <div>
+                    <div className="text-sm font-medium">{a.cliente || "Cliente"}</div>
+                    <div className="text-xs text-muted-foreground">Pedido: {a.pedido || "-"}</div>
+                  </div>
+                  <Badge variant="secondary">{new Date(a.data_hora).toLocaleString()}</Badge>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-5">
+            <div className="mb-3 font-medium">Alertas</div>
+            <div className="space-y-3">
+              <div>
+                <div className="text-sm font-medium mb-1">Estoques Baixos</div>
+                <div className="space-y-1">
+                  {(lowStocks ?? []).length === 0 && (
+                    <div className="text-xs text-muted-foreground">Sem alertas de estoque.</div>
+                  )}
+                  {(lowStocks ?? []).map((s: any) => (
+                    <div key={s.id} className="text-xs flex items-center justify-between rounded border p-2">
+                      <div>Produto #{s.product_id} • Armazém #{s.warehouse_id}</div>
+                      <Badge variant="destructive">{Number(s.quantidade_atual ?? 0)}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <div className="text-sm font-medium mb-1">Liberações Atrasadas</div>
+                <div className="space-y-1">
+                  {(atrasos ?? []).length === 0 && (
+                    <div className="text-xs text-muted-foreground">Sem liberações atrasadas.</div>
+                  )}
+                  {(atrasos ?? []).map((l: any) => (
+                    <div key={l.id} className="text-xs flex items-center justify-between rounded border p-2">
+                      <div>
+                        {l.cliente || "Cliente"} • Pedido {l.pedido || "-"}
+                        <div className="text-[10px] text-muted-foreground">Desde {toBRDate(l.created_at)}</div>
                       </div>
-                      <p className="mt-1 text-sm text-muted-foreground">{activity.description}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">{activity.time}</p>
+                      <Badge variant="outline">Pendente</Badge>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Próximos Agendamentos</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {upcomingSchedules.map((schedule) => (
-                  <div key={schedule.id} className="flex items-center gap-4 rounded-lg border border-border p-4 transition-colors hover:bg-muted/50">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-primary text-white font-bold">
-                      {schedule.time}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium text-foreground">{schedule.client}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {schedule.product} - {schedule.quantity} | {schedule.plate}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );
