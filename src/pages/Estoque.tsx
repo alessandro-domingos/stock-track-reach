@@ -30,6 +30,10 @@ const Estoque = () => {
   const { toast } = useToast();
   const { hasRole, user } = useAuth();
 
+  // Permissão: agora Admin OU Logística podem atualizar
+  const canUpdateStock = hasRole("logistica") || hasRole("admin");
+  const roleUsed = hasRole("admin") ? "admin" : (hasRole("logistica") ? "logistica" : "sem-permissao");
+
   // Lista mockada de estoque (local, sem persistência)
   const [estoque, setEstoque] = useState<StockItem[]>([
     { id: 1, produto: "Ureia", armazem: "São Paulo", quantidade: 45.5, unidade: "t", status: "normal" },
@@ -115,11 +119,11 @@ const Estoque = () => {
   };
 
   const handleSaveUpdate = async () => {
-    if (!hasRole("logistica")) {
+    if (!canUpdateStock) {
       toast({
         variant: "destructive",
         title: "Permissão insuficiente",
-        description: "Somente usuários com perfil de Logística podem atualizar o estoque.",
+        description: "Apenas usuários com perfil de Logística ou Admin podem atualizar o estoque.",
       });
       return;
     }
@@ -156,21 +160,12 @@ const Estoque = () => {
 
     toast({
       title: "Estoque atualizado",
-      description: `Operação: ${updateForm.reason}. Quantidade alterada para ${newQtyNum}.`,
+      description: `Operação: ${updateForm.reason}. Quantidade alterada para ${newQtyNum}. Perfil: ${roleUsed}.`,
     });
 
     // Tenta persistir no backend (quando estrutura existir)
-    // Mantém UX mesmo se falhar (apenas informa)
     try {
-      // Preferência por RPC (quando existir):
-      // const { error } = await supabase.rpc('update_stock_quantity', {
-      //   p_item_id: selectedItem.id,
-      //   p_new_qty: newQtyNum,
-      //   p_reason: updateForm.reason,
-      //   p_updated_by: user?.id ?? null,
-      // });
-
-      // Fallback: update direto em tabela hipotética 'stock_balances'
+      // Preferência por RPC futura (ex.: update_stock_quantity)
       const { error } = await supabase
         .from("stock_balances")
         .update({
@@ -182,7 +177,6 @@ const Estoque = () => {
         .eq("id", selectedItem.id);
 
       if (error) {
-        // Apenas informa, sem reverter atualização local
         toast({
           variant: "destructive",
           title: "Persistência pendente",
@@ -314,13 +308,12 @@ const Estoque = () => {
                       {item.status === "baixo" ? "Estoque Baixo" : "Normal"}
                     </Badge>
 
-                    {/* Atualizar */}
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => openUpdateDialog(item)}
-                      disabled={!hasRole("logistica")}
-                      title={!hasRole("logistica") ? "Apenas Logística pode atualizar" : "Atualizar quantidade"}
+                      disabled={!canUpdateStock}
+                      title={!canUpdateStock ? "Apenas Logística ou Admin podem atualizar" : "Atualizar quantidade"}
                     >
                       Atualizar
                     </Button>
