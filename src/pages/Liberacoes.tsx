@@ -7,13 +7,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, ClipboardList } from "lucide-react";
+import { Plus, ClipboardList, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
 type Unidade = "t" | "kg";
-type StatusLib = "pendente" | "parcial" | "concluido";
+type StatusLib = "pendente" | "parcial" | "concluido" | "cancelado";
 
 interface ProdutoOption {
   id: string;
@@ -35,6 +35,25 @@ interface LiberacaoItem {
   pedido: string;
   data: string; // dd/mm/yyyy
   status: StatusLib;
+  armazem?: string;
+  produto_id?: string;
+  armazem_id?: string;
+}
+
+interface AgendamentoItem {
+  id: string;
+  release_id?: string;
+  liberacao_id?: string;
+  quantidade: number;
+  status: string;
+  data_hora?: string;
+  data_retirada?: string;
+  horario?: string;
+}
+
+interface WithdrawalHistoryItem {
+  data: string;
+  quantidade: number;
 }
 
 const formatDateBR = (d = new Date()) => {
@@ -52,6 +71,8 @@ const getStatusColor = (status: StatusLib) => {
       return "default";
     case "parcial":
       return "secondary";
+    case "cancelado":
+      return "destructive";
     case "pendente":
     default:
       return "outline";
@@ -64,9 +85,26 @@ const getStatusText = (status: StatusLib) => {
       return "Concluído";
     case "parcial":
       return "Parcial";
+    case "cancelado":
+      return "Cancelado";
     case "pendente":
     default:
       return "Pendente";
+  }
+};
+
+const getStatusBadgeClasses = (status: StatusLib) => {
+  switch (status) {
+    case "pendente":
+      return "bg-yellow-500 text-white";
+    case "parcial":
+      return "bg-blue-500 text-white";
+    case "concluido":
+      return "bg-green-600 text-white";
+    case "cancelado":
+      return "bg-red-600 text-white";
+    default:
+      return "";
   }
 };
 
@@ -77,14 +115,21 @@ const Liberacoes = () => {
 
   // Lista inicial mockada (mantida) + estado
   const [liberacoes, setLiberacoes] = useState<LiberacaoItem[]>([
-    { id: 1, produto: "Ureia", cliente: "Cliente ABC Ltda", quantidade: 10.0, quantidadeRetirada: 6.0, pedido: "PED-2024-001", data: "15/01/2024", status: "parcial" },
-    { id: 2, produto: "NPK 20-05-20", cliente: "Transportadora XYZ", quantidade: 15.0, quantidadeRetirada: 0, pedido: "PED-2024-002", data: "16/01/2024", status: "pendente" },
-    { id: 3, produto: "Super Simples", cliente: "Fazenda Boa Vista", quantidade: 20.0, quantidadeRetirada: 20.0, pedido: "PED-2024-003", data: "14/01/2024", status: "concluido" },
-    { id: 4, produto: "MAP", cliente: "Agro Tech", quantidade: 8.5, quantidadeRetirada: 0, pedido: "PED-2024-004", data: "16/01/2024", status: "pendente" },
+    { id: 1, produto: "Ureia", cliente: "Cliente ABC Ltda", quantidade: 10.0, quantidadeRetirada: 6.0, pedido: "PED-2024-001", data: "15/01/2024", status: "parcial", armazem: "Armazém São Paulo" },
+    { id: 2, produto: "NPK 20-05-20", cliente: "Transportadora XYZ", quantidade: 15.0, quantidadeRetirada: 0, pedido: "PED-2024-002", data: "16/01/2024", status: "pendente", armazem: "Armazém Rio de Janeiro" },
+    { id: 3, produto: "Super Simples", cliente: "Fazenda Boa Vista", quantidade: 20.0, quantidadeRetirada: 20.0, pedido: "PED-2024-003", data: "14/01/2024", status: "concluido", armazem: "Armazém Belo Horizonte" },
+    { id: 4, produto: "MAP", cliente: "Agro Tech", quantidade: 8.5, quantidadeRetirada: 0, pedido: "PED-2024-004", data: "16/01/2024", status: "pendente", armazem: "Armazém Curitiba" },
   ]);
 
   // Dialog e formulário
   const [dialogOpen, setDialogOpen] = useState(false);
+  
+  // Estados para o dialog de detalhes
+  const [selectedRelease, setSelectedRelease] = useState<LiberacaoItem | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [relatedSchedules, setRelatedSchedules] = useState<AgendamentoItem[]>([]);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [derivedWithdrawHistory, setDerivedWithdrawHistory] = useState<WithdrawalHistoryItem[]>([]);
   const [form, setForm] = useState({
     cliente: "",
     produtoId: "",
@@ -162,11 +207,143 @@ const Liberacoes = () => {
 
       if (error) throw error;
       const totalDisponivel =
-        (data || []).reduce((sum: number, row: any) => sum + Number(row.quantidade_atual || 0), 0);
+        (data || []).reduce((sum: number, row: { quantidade_atual?: number }) => sum + Number(row.quantidade_atual || 0), 0);
       return totalDisponivel >= qty;
     } catch {
       // Se não conseguimos validar, retornamos null para indicar indeterminado
       return null as unknown as boolean;
+    }
+  };
+
+  const fetchSchedules = async (releaseId: number): Promise<AgendamentoItem[]> => {
+    try {
+      // Try agendamentos first
+      const { data, error } = await supabase
+        .from("agendamentos")
+        .select("id, liberacao_id, quantidade, status, data_retirada, horario")
+        .eq("liberacao_id", releaseId);
+
+      if (!error && data) {
+        return data.map((item) => ({
+          ...item,
+          data_hora: item.data_retirada && item.horario 
+            ? `${item.data_retirada} ${item.horario}` 
+            : item.data_retirada || "",
+        }));
+      }
+
+      // Fallback to schedules table
+      const { data: schedData, error: schedError } = await supabase
+        .from("schedules")
+        .select("id, release_id, quantidade, status, data_hora")
+        .eq("release_id", releaseId);
+
+      if (!schedError && schedData) {
+        return schedData as AgendamentoItem[];
+      }
+
+      return [];
+    } catch {
+      return [];
+    }
+  };
+
+  const deriveWithdrawals = (schedules: AgendamentoItem[]): WithdrawalHistoryItem[] => {
+    const withdrawalStatuses = ["carregado", "entregue", "concluido", "nf_entregue"];
+    const withdrawn = schedules.filter((s) => 
+      withdrawalStatuses.includes(s.status?.toLowerCase() || "")
+    );
+
+    return withdrawn.map((w) => ({
+      data: w.data_hora || w.data_retirada || "-",
+      quantidade: w.quantidade,
+    }));
+  };
+
+  const handleOpenDetails = async (release: LiberacaoItem) => {
+    const canView = hasRole("admin") || hasRole("logistica") || hasRole("armazem");
+    
+    if (!canView) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Você não tem permissão para visualizar detalhes.",
+      });
+      return;
+    }
+
+    setSelectedRelease(release);
+    setDetailsOpen(true);
+    setLoadingDetails(true);
+    setRelatedSchedules([]);
+    setDerivedWithdrawHistory([]);
+
+    const schedules = await fetchSchedules(release.id);
+    setRelatedSchedules(schedules);
+    
+    const history = deriveWithdrawals(schedules);
+    setDerivedWithdrawHistory(history);
+    
+    setLoadingDetails(false);
+  };
+
+  const handleCancelRelease = async () => {
+    if (!selectedRelease) return;
+
+    const canCancel = hasRole("admin") || hasRole("logistica");
+    if (!canCancel) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Apenas Admin ou Logística podem cancelar liberações.",
+      });
+      return;
+    }
+
+    if (!window.confirm("Tem certeza que deseja cancelar esta liberação?")) {
+      return;
+    }
+
+    // Update local state immediately
+    setLiberacoes((prev) =>
+      prev.map((lib) =>
+        lib.id === selectedRelease.id ? { ...lib, status: "cancelado" as StatusLib } : lib
+      )
+    );
+
+    if (selectedRelease) {
+      setSelectedRelease({ ...selectedRelease, status: "cancelado" as StatusLib });
+    }
+
+    // Try to persist to database
+    try {
+      const { error } = await supabase
+        .from("liberacoes")
+        .update({
+          status: "cancelado",
+          cancelled_at: new Date().toISOString(),
+          cancelled_by: user?.id ?? null,
+        })
+        .eq("id", selectedRelease.id);
+
+      if (error) {
+        toast({
+          variant: "destructive",
+          title: "Persistência pendente",
+          description: "A liberação foi cancelada localmente, mas não foi possível salvar no banco agora.",
+        });
+      } else {
+        toast({
+          title: "Liberação cancelada",
+          description: "A liberação foi cancelada com sucesso.",
+        });
+      }
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Persistência pendente",
+        description: "A liberação foi cancelada localmente, mas não foi possível salvar no banco agora.",
+      });
     }
   };
 
@@ -438,8 +615,18 @@ const Liberacoes = () => {
                       <p className="mt-1 text-sm text-muted-foreground">Data: {lib.data}</p>
                     </div>
                   </div>
-                  <div>
-                    <Badge variant={getStatusColor(lib.status)}>{getStatusText(lib.status)}</Badge>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleOpenDetails(lib)}
+                    >
+                      <Info className="mr-2 h-4 w-4" />
+                      Detalhes
+                    </Button>
+                    <Badge variant={getStatusColor(lib.status)} className={getStatusBadgeClasses(lib.status)}>
+                      {getStatusText(lib.status)}
+                    </Badge>
                   </div>
                 </div>
               </CardContent>
@@ -447,6 +634,195 @@ const Liberacoes = () => {
           ))}
         </div>
       </div>
+
+      {/* Details Dialog */}
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedRelease?.produto} - Pedido {selectedRelease?.pedido}
+            </DialogTitle>
+          </DialogHeader>
+
+          {selectedRelease && (
+            <div className="space-y-6 py-4">
+              {/* Informações Gerais */}
+              <div className="space-y-3">
+                <h3 className="text-lg font-semibold">Informações Gerais</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground">Produto</Label>
+                    <p className="font-medium">{selectedRelease.produto}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Cliente</Label>
+                    <p className="font-medium">{selectedRelease.cliente}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Armazém</Label>
+                    <p className="font-medium">{selectedRelease.armazem || "-"}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Pedido</Label>
+                    <p className="font-medium">{selectedRelease.pedido}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Data de Liberação</Label>
+                    <p className="font-medium">{selectedRelease.data}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Status</Label>
+                    <div className="mt-1">
+                      <Badge
+                        variant={getStatusColor(selectedRelease.status)}
+                        className={getStatusBadgeClasses(selectedRelease.status)}
+                      >
+                        {getStatusText(selectedRelease.status)}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Quantidades */}
+              <div className="space-y-3">
+                <h3 className="text-lg font-semibold">Quantidades</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <Label className="text-muted-foreground">Liberada</Label>
+                    <p className="text-xl font-bold">{selectedRelease.quantidade}</p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Retirada</Label>
+                    <p className="text-xl font-bold">
+                      {relatedSchedules
+                        .filter((s) =>
+                          ["carregado", "entregue", "concluido", "nf_entregue"].includes(
+                            s.status?.toLowerCase() || ""
+                          )
+                        )
+                        .reduce((sum, s) => sum + s.quantidade, 0)
+                        .toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-muted-foreground">Restante</Label>
+                    <p className="text-xl font-bold">
+                      {(
+                        selectedRelease.quantidade -
+                        relatedSchedules
+                          .filter((s) =>
+                            ["carregado", "entregue", "concluido", "nf_entregue"].includes(
+                              s.status?.toLowerCase() || ""
+                            )
+                          )
+                          .reduce((sum, s) => sum + s.quantidade, 0)
+                      ).toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+                {selectedRelease.quantidade -
+                  relatedSchedules
+                    .filter((s) =>
+                      ["carregado", "entregue", "concluido", "nf_entregue"].includes(
+                        s.status?.toLowerCase() || ""
+                      )
+                    )
+                    .reduce((sum, s) => sum + s.quantidade, 0) <=
+                  0 &&
+                  selectedRelease.status !== "concluido" && (
+                    <p className="text-sm text-amber-600 font-medium">
+                      Liberação totalmente retirada
+                    </p>
+                  )}
+              </div>
+
+              {/* Agendamentos Relacionados */}
+              <div className="space-y-3">
+                <h3 className="text-lg font-semibold">Agendamentos Relacionados</h3>
+                {loadingDetails ? (
+                  <p className="text-sm text-muted-foreground">Carregando agendamentos...</p>
+                ) : relatedSchedules.length > 0 ? (
+                  <div className="border rounded-md">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="px-4 py-2 text-left font-medium">Data/Hora</th>
+                            <th className="px-4 py-2 text-left font-medium">Quantidade</th>
+                            <th className="px-4 py-2 text-left font-medium">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {relatedSchedules.map((schedule) => (
+                            <tr key={schedule.id} className="border-t">
+                              <td className="px-4 py-2">{schedule.data_hora || "-"}</td>
+                              <td className="px-4 py-2">{schedule.quantidade}</td>
+                              <td className="px-4 py-2">
+                                <Badge variant="outline">{schedule.status}</Badge>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhum agendamento encontrado.
+                  </p>
+                )}
+              </div>
+
+              {/* Histórico de Retiradas */}
+              <div className="space-y-3">
+                <h3 className="text-lg font-semibold">Histórico de Retiradas</h3>
+                {loadingDetails ? (
+                  <p className="text-sm text-muted-foreground">Carregando histórico...</p>
+                ) : derivedWithdrawHistory.length > 0 ? (
+                  <div className="border rounded-md">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50">
+                          <tr>
+                            <th className="px-4 py-2 text-left font-medium">Data</th>
+                            <th className="px-4 py-2 text-left font-medium">Quantidade Retirada</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {derivedWithdrawHistory.map((item, idx) => (
+                            <tr key={idx} className="border-t">
+                              <td className="px-4 py-2">{item.data}</td>
+                              <td className="px-4 py-2">{item.quantidade}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Nenhuma retirada registrada.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            {selectedRelease &&
+              (selectedRelease.status === "pendente" || selectedRelease.status === "parcial") &&
+              (hasRole("admin") || hasRole("logistica")) && (
+                <Button variant="destructive" onClick={handleCancelRelease}>
+                  Cancelar Liberação
+                </Button>
+              )}
+            <Button variant="outline" onClick={() => setDetailsOpen(false)}>
+              Fechar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
