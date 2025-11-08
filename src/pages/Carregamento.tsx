@@ -18,14 +18,14 @@ import {
   SelectItem
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Truck, Camera, RefreshCcw } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Truck, Camera, RefreshCcw, FileCheck2, FilePlus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 
 /* Tipos */
 type StatusCarregamento = "aguardando" | "em_andamento" | "concluido" | "cancelado";
-
 type FotoTipo =
   | "antes_carregamento"
   | "durante_carregamento"
@@ -43,10 +43,13 @@ interface CarregamentoItem {
   horario: string;
   status: StatusCarregamento;
   fotosTotal: number;
-  releaseId?: number | string;      // para atualizar liberação
-  productId?: number | string;      // para atualizar estoque
-  warehouseId?: number | string;    // para atualizar estoque
+  releaseId?: number | string;
+  productId?: number | string;
+  warehouseId?: number | string;
   photosByType: Record<FotoTipo, number>;
+  numeroNF?: string;
+  dataEmissaoNF?: string; // ISO yyyy-mm-dd
+  nfFileUrl?: string;
 }
 
 const REQUIRED_PHOTO_TYPES_FOR_CONCLUDE: FotoTipo[] = [
@@ -56,15 +59,16 @@ const REQUIRED_PHOTO_TYPES_FOR_CONCLUDE: FotoTipo[] = [
 ];
 
 const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "heic"];
+const ALLOWED_NF_EXTENSIONS = ["jpg", "jpeg", "png", "heic", "pdf"];
 
 const Carregamento = () => {
   const { toast } = useToast();
   const { hasRole, user } = useAuth();
 
   const canUpload = hasRole("admin") || hasRole("armazem") || hasRole("logistica");
-  const canUpdateStatus = canUpload; // mesmas roles
+  const canUpdateStatus = canUpload;
+  const canRegisterNF = canUpload;
 
-  /* Estado local inicial (já usando novo fluxo de status) */
   const [carregamentos, setCarregamentos] = useState<CarregamentoItem[]>([
     {
       id: 1,
@@ -131,7 +135,7 @@ const Carregamento = () => {
     }
   ]);
 
-  /* ---- Diálogo de Upload de Fotos ---- */
+  /* ---------- Dialog Upload Fotos (já existente) ---------- */
   const [dialogUploadOpen, setDialogUploadOpen] = useState(false);
   const [selectedCarregamento, setSelectedCarregamento] = useState<CarregamentoItem | null>(null);
   const [fotoTipo, setFotoTipo] = useState<FotoTipo | "">("");
@@ -139,13 +143,74 @@ const Carregamento = () => {
   const [previews, setPreviews] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
 
-  /* ---- Diálogo de Atualização de Status ---- */
+  /* ---------- Dialog Atualizar Status (já existente) ---------- */
   const [dialogStatusOpen, setDialogStatusOpen] = useState(false);
   const [statusTarget, setStatusTarget] = useState<StatusCarregamento | "">("");
   const [statusObservation, setStatusObservation] = useState("");
   const [statusLoading, setStatusLoading] = useState(false);
   const [statusItem, setStatusItem] = useState<CarregamentoItem | null>(null);
 
+  /* ---------- Dialog NF Entregue (novo) ---------- */
+  const [dialogNFOpen, setDialogNFOpen] = useState(false);
+  const [nfItem, setNFItem] = useState<CarregamentoItem | null>(null);
+  const [nfNumber, setNfNumber] = useState("");
+  const [nfDate, setNfDate] = useState<string>(() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  });
+  const [nfFile, setNfFile] = useState<File | null>(null);
+  const [nfUploading, setNfUploading] = useState(false);
+  const [nfViewMode, setNfViewMode] = useState(false); // se já existe NF cadastrada
+
+  /* ----- Helpers gerais ----- */
+  const sanitizeFileName = (name: string) =>
+    name
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^a-z0-9._-]/g, "");
+
+  const getStatusBadgeVariant = (status: StatusCarregamento) => {
+    switch (status) {
+      case "aguardando":
+        return "secondary";
+      case "em_andamento":
+        return "default";
+      case "concluido":
+        return "default";
+      case "cancelado":
+        return "destructive";
+      default:
+        return "outline";
+    }
+  };
+
+  const nextValidStatuses = (current: StatusCarregamento): StatusCarregamento[] => {
+    switch (current) {
+      case "aguardando":
+        return ["em_andamento", "cancelado"];
+      case "em_andamento":
+        return ["concluido", "cancelado"];
+      default:
+        return [];
+    }
+  };
+
+  const canTransition = (from: StatusCarregamento, to: StatusCarregamento) => {
+    if (from === "concluido" || from === "cancelado") return false;
+    return nextValidStatuses(from).includes(to);
+  };
+
+  const verifyRequiredPhotos = (item: CarregamentoItem): boolean => {
+    for (const tipo of REQUIRED_PHOTO_TYPES_FOR_CONCLUDE) {
+      if ((item.photosByType[tipo] || 0) < 1) return false;
+    }
+    return true;
+  };
+
+  /* ----- Abrir diálogo upload fotos ----- */
   const handleOpenDialogUpload = (c: CarregamentoItem) => {
     if (!canUpload) {
       toast({
@@ -162,69 +227,39 @@ const Carregamento = () => {
     setPreviews([]);
   };
 
-  const handleOpenDialogStatus = (c: CarregamentoItem) => {
-    if (!canUpdateStatus) {
-      toast({
-        variant: "destructive",
-        title: "Permissão insuficiente",
-        description: "Apenas Admin, Armazém ou Logística podem atualizar status."
-      });
-      return;
-    }
-    if (c.status === "concluido" || c.status === "cancelado") {
-      toast({
-        variant: "destructive",
-        title: "Status final",
-        description: "Não é possível alterar status após concluído ou cancelado."
-      });
-      return;
-    }
-    setStatusItem(c);
-    setDialogStatusOpen(true);
-    setStatusTarget("");
-    setStatusObservation("");
-  };
-
-  /* ----- Upload de Fotos ----- */
-  const sanitizeFileName = (name: string) =>
-    name
-      .toLowerCase()
-      .replace(/\s+/g, "_")
-      .replace(/[^a-z0-9._-]/g, "");
-
+  /* ----- Validação arquivos de fotos comuns ----- */
   const validateFiles = (incoming: FileList | null) => {
     if (!incoming) return;
-
     const arr = Array.from(incoming);
     if (arr.length > 10) {
       toast({
         variant: "destructive",
         title: "Limite excedido",
-        description: "Selecione no máximo 10 imagens por vez."
+        description: "Selecione no máximo 10 imagens."
       });
       return;
     }
 
     const valid: File[] = [];
-    const previewUrls: string[] = [];
+    const previewsLocal: string[] = [];
     for (const f of arr) {
       const ext = f.name.split(".").pop()?.toLowerCase() || "";
       if (!ALLOWED_EXTENSIONS.includes(ext)) {
         toast({
           variant: "destructive",
           title: "Formato inválido",
-          description: `Arquivo ${f.name} ignorado. Permitidos: ${ALLOWED_EXTENSIONS.join(", ")}`
+          description: `Ignorado: ${f.name}. Permitidos: ${ALLOWED_EXTENSIONS.join(", ")}`
         });
         continue;
       }
       valid.push(f);
-      previewUrls.push(URL.createObjectURL(f));
+      previewsLocal.push(URL.createObjectURL(f));
     }
-
     setFiles(valid);
-    setPreviews(previewUrls);
+    setPreviews(previewsLocal);
   };
 
+  /* ----- Upload de fotos comuns ----- */
   const handleUpload = async () => {
     if (!selectedCarregamento) return;
     if (!fotoTipo) {
@@ -239,7 +274,7 @@ const Carregamento = () => {
       toast({
         variant: "destructive",
         title: "Nenhuma imagem",
-        description: "Selecione ao menos uma imagem para enviar."
+        description: "Selecione ao menos uma imagem."
       });
       return;
     }
@@ -297,8 +332,8 @@ const Carregamento = () => {
     }
 
     if (sucesso > 0) {
-      setCarregamentos((prev) =>
-        prev.map((c) =>
+      setCarregamentos(prev =>
+        prev.map(c =>
           c.id === carregamentoId
             ? {
                 ...c,
@@ -313,20 +348,13 @@ const Carregamento = () => {
       );
     }
 
-    if (sucesso > 0) {
-      toast({
-        title: "Upload concluído",
-        description: `${sucesso} foto(s) anexada(s) com sucesso${
-          falhas > 0 ? ` (${falhas} falha(s))` : ""
-        }.`
-      });
-    } else {
-      toast({
-        variant: "destructive",
-        title: "Falha no upload",
-        description: "Nenhuma foto foi enviada. Verifique o bucket e as migrations."
-      });
-    }
+    toast({
+      title: sucesso > 0 ? "Upload concluído" : "Falha no upload",
+      description:
+        sucesso > 0
+          ? `${sucesso} foto(s) anexada(s)${falhas ? ` (${falhas} falha(s))` : ""}.`
+          : "Nenhuma foto enviada."
+    });
 
     setUploading(false);
     setDialogUploadOpen(false);
@@ -335,100 +363,83 @@ const Carregamento = () => {
     setFotoTipo("");
   };
 
-  /* ----- Atualização de Status ----- */
-  const nextValidStatuses = (current: StatusCarregamento): StatusCarregamento[] => {
-    switch (current) {
-      case "aguardando":
-        return ["em_andamento", "cancelado"];
-      case "em_andamento":
-        return ["concluido", "cancelado"];
-      default:
-        return []; // concluido ou cancelado -> final
+  /* ----- Abrir diálogo status ----- */
+  const handleOpenDialogStatus = (c: CarregamentoItem) => {
+    if (!canUpdateStatus) {
+      toast({
+        variant: "destructive",
+        title: "Sem permissão",
+        description: "Você não pode atualizar status."
+      });
+      return;
     }
-  };
-
-  const canTransition = (
-    from: StatusCarregamento,
-    to: StatusCarregamento
-  ): boolean => {
-    if (from === "concluido" || from === "cancelado") return false;
-    const valid = nextValidStatuses(from);
-    return valid.includes(to);
-  };
-
-  const verifyRequiredPhotos = (item: CarregamentoItem): boolean => {
-    for (const tipo of REQUIRED_PHOTO_TYPES_FOR_CONCLUDE) {
-      if ((item.photosByType[tipo] || 0) < 1) {
-        return false;
-      }
+    if (c.status === "concluido" || c.status === "cancelado") {
+      toast({
+        variant: "destructive",
+        title: "Status final",
+        description: "Não é possível alterar após conclusão/cancelamento."
+      });
+      return;
     }
-    return true;
+    setStatusItem(c);
+    setDialogStatusOpen(true);
+    setStatusTarget("");
+    setStatusObservation("");
   };
 
+  /* ----- Atualização de status ----- */
   const handleUpdateStatus = async () => {
     if (!statusItem) return;
     if (!statusTarget) {
       toast({
         variant: "destructive",
-        title: "Selecione o novo status",
-        description: "Escolha uma opção válida de status."
+        title: "Selecione um status",
+        description: "É necessário escolher o novo status."
       });
       return;
     }
     if (!canUpdateStatus) {
       toast({
         variant: "destructive",
-        title: "Permissão insuficiente",
-        description: "Você não pode atualizar o status deste carregamento."
+        title: "Sem permissão",
+        description: "Você não pode alterar o status."
       });
       return;
     }
-
-    // fluxo de transição
     if (!canTransition(statusItem.status, statusTarget as StatusCarregamento)) {
       toast({
         variant: "destructive",
         title: "Transição inválida",
-        description: `Não é permitido mudar de '${statusItem.status}' para '${statusTarget}'.`
+        description: `De '${statusItem.status}' para '${statusTarget}' não é permitido.`
       });
       return;
     }
-
-    // observação obrigatória ao cancelar
     if (statusTarget === "cancelado" && !statusObservation.trim()) {
       toast({
         variant: "destructive",
         title: "Observação obrigatória",
-        description: "Informe uma observação ao cancelar."
+        description: "Informe uma observação para cancelamento."
+      });
+      return;
+    }
+    if (statusTarget === "concluido" && !verifyRequiredPhotos(statusItem)) {
+      toast({
+        variant: "destructive",
+        title: "Fotos obrigatórias ausentes",
+        description: "Faltam fotos: antes, após e nota fiscal."
       });
       return;
     }
 
-    // verificações ao concluir
-    if (statusTarget === "concluido") {
-      if (!verifyRequiredPhotos(statusItem)) {
-        toast({
-          variant: "destructive",
-          title: "Fotos obrigatórias ausentes",
-          description:
-            "Para concluir, é necessário pelo menos uma foto de: antes, depois e nota fiscal."
-        });
-        return;
-      }
-    }
-
     setStatusLoading(true);
-
-    // Atualização local
-    setCarregamentos((prev) =>
-      prev.map((c) =>
+    setCarregamentos(prev =>
+      prev.map(c =>
         c.id === statusItem.id ? { ...c, status: statusTarget as StatusCarregamento } : c
       )
     );
 
-    // Persistir no backend
     try {
-      const { error: updateErr } = await supabase
+      const { error } = await supabase
         .from("carregamentos")
         .update({
           status: statusTarget,
@@ -437,54 +448,45 @@ const Carregamento = () => {
           updated_at: new Date().toISOString()
         })
         .eq("id", statusItem.id);
-
-      if (updateErr) {
+      if (error) {
         toast({
           variant: "destructive",
           title: "Persistência pendente",
-          description:
-            "Status atualizado localmente; não foi possível salvar no banco (tabela ou migrations podem faltar)."
+          description: "Mudança local aplicada. Banco não atualizado."
         });
       }
     } catch {
       toast({
         variant: "destructive",
-        title: "Persistência pendente",
-        description:
-          "Status atualizado localmente; não foi possível salvar no banco (erro inesperado)."
+        title: "Erro inesperado",
+        description: "Falha ao persistir mudança de status."
       });
     }
 
-    // Operações ao concluir (atualiza liberação e estoque)
     if (statusTarget === "concluido") {
       await finalizeCarregamentoEffects(statusItem);
     }
 
     toast({
       title: "Status atualizado",
-      description: `Carregamento #${statusItem.id} agora está '${statusTarget}'.`
+      description: `Carregamento #${statusItem.id} agora: ${statusTarget}.`
     });
 
     setStatusLoading(false);
     setDialogStatusOpen(false);
     setStatusItem(null);
-    setStatusTarget("");
-    setStatusObservation("");
   };
 
-  // Função: efeitos ao concluir (quantidade retirada + estoque)
+  /* ----- Efeitos ao concluir: liberação + estoque ----- */
   const finalizeCarregamentoEffects = async (item: CarregamentoItem) => {
-    // Atualiza quantidade_retirada em liberação
+    // Atualiza quantidade_retirada
     if (item.releaseId) {
       try {
-        // Buscar quantidade atual
         const { data: libData, error: libErr } = await supabase
           .from("liberacoes")
           .select("id, quantidade_retirada")
           .eq("id", item.releaseId)
-          .limit(1)
           .maybeSingle();
-
         if (!libErr && libData) {
           const atual = Number(libData.quantidade_retirada || 0);
           const novo = atual + item.quantidade;
@@ -499,23 +501,21 @@ const Carregamento = () => {
           if (upErr) {
             toast({
               variant: "destructive",
-              title: "Falha ao atualizar liberação",
-              description:
-                "Não foi possível ajustar quantidade retirada. Migrations podem estar pendentes."
+              title: "Liberação pendente",
+              description: "Não foi possível atualizar quantidade retirada."
             });
           }
         }
       } catch {
         toast({
           variant: "destructive",
-          title: "Falha ao atualizar liberação",
-          description:
-            "Erro inesperado ao somar quantidade retirada. Verifique o backend."
+          title: "Erro liberação",
+          description: "Falha ao recalcular retirada."
         });
       }
     }
 
-    // Atualiza estoque (subtrai)
+    // Atualiza estoque
     if (item.productId && item.warehouseId) {
       try {
         const { data: stockData, error: stockErr } = await supabase
@@ -523,13 +523,11 @@ const Carregamento = () => {
           .select("id, quantidade_atual")
           .eq("product_id", item.productId)
           .eq("warehouse_id", item.warehouseId)
-          .limit(1)
           .maybeSingle();
-
         if (!stockErr && stockData) {
           const atual = Number(stockData.quantidade_atual || 0);
-            const novo = Math.max(0, atual - item.quantidade); // não deixar negativo
-          const { error: upStockErr } = await supabase
+          const novo = Math.max(0, atual - item.quantidade);
+          const { error: upErr } = await supabase
             .from("stock_balances")
             .update({
               quantidade_atual: novo,
@@ -537,37 +535,215 @@ const Carregamento = () => {
               updated_by: user?.id ?? null
             })
             .eq("id", stockData.id);
-          if (upStockErr) {
+          if (upErr) {
             toast({
               variant: "destructive",
-              title: "Falha ao atualizar estoque",
-              description:
-                "Não foi possível subtrair quantidade. Migrations podem estar pendentes."
+              title: "Estoque pendente",
+              description: "Não foi possível atualizar saldo."
             });
           }
         }
       } catch {
         toast({
           variant: "destructive",
-          title: "Falha ao atualizar estoque",
-          description: "Erro inesperado ao subtrair quantidade do estoque."
+          title: "Erro estoque",
+          description: "Falha ao subtrair do estoque."
         });
       }
     }
   };
 
-  const getStatusBadgeVariant = (status: StatusCarregamento) => {
+  /* ----- NF Entregue: abrir diálogo ----- */
+  const openNFDialog = (item: CarregamentoItem) => {
+    if (!canRegisterNF) {
+      toast({
+        variant: "destructive",
+        title: "Sem permissão",
+        description: "Apenas Admin, Armazém ou Logística podem registrar NF."
+      });
+      return;
+    }
+    setNFItem(item);
+    setDialogNFOpen(true);
+    setNfNumber(item.numeroNF || "");
+    setNfDate(item.dataEmissaoNF || (() => {
+      const d = new Date();
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      return `${yyyy}-${mm}-${dd}`;
+    })());
+    setNfFile(null);
+    setNfViewMode(Boolean(item.numeroNF));
+  };
+
+  /* ----- NF: validações ----- */
+  const handleNFFileChange = (f: File | null) => {
+    if (!f) {
+      setNfFile(null);
+      return;
+    }
+    const ext = f.name.split(".").pop()?.toLowerCase() || "";
+    if (!ALLOWED_NF_EXTENSIONS.includes(ext)) {
+      toast({
+        variant: "destructive",
+        title: "Formato inválido",
+        description: `Permitidos: ${ALLOWED_NF_EXTENSIONS.join(", ")}`
+      });
+      setNfFile(null);
+      return;
+    }
+    setNfFile(f);
+  };
+
+  const handleSaveNF = async () => {
+    if (!nfItem) return;
+    if (!nfNumber.trim()) {
+      toast({
+        variant: "destructive",
+        title: "Número obrigatório",
+        description: "Informe o número da NF."
+      });
+      return;
+    }
+    // Data não pode ser futura
+    const hoje = new Date();
+    const nfDateObj = new Date(nfDate + "T00:00:00");
+    if (nfDateObj > hoje) {
+      toast({
+        variant: "destructive",
+        title: "Data inválida",
+        description: "Data de emissão não pode ser futura."
+      });
+      return;
+    }
+    if (!nfFile) {
+      toast({
+        variant: "destructive",
+        title: "Arquivo obrigatório",
+        description: "Selecione o arquivo da NF (imagem ou PDF)."
+      });
+      return;
+    }
+
+    setNfUploading(true);
+    const carregamentoId = nfItem.id;
+    const timestamp = Date.now();
+    const sanitized = sanitizeFileName(nfFile.name);
+    const path = `${carregamentoId}/notas_fiscais/${timestamp}_${sanitized}`;
+
+    let publicUrl: string | undefined = undefined;
+
+    try {
+      const { error: upErr } = await supabase
+        .storage
+        .from("carregamento-fotos")
+        .upload(path, nfFile, {
+          upsert: false,
+          contentType: nfFile.type
+        });
+      if (upErr) throw upErr;
+
+      const { data: pubData } = supabase
+        .storage
+        .from("carregamento-fotos")
+        .getPublicUrl(path);
+      publicUrl = pubData?.publicUrl;
+
+      // inserir foto tipo nota_fiscal
+      const { error: fotoErr } = await supabase
+        .from("fotos_carregamento")
+        .insert({
+          carregamento_id: carregamentoId,
+          url: publicUrl,
+          tipo: "nota_fiscal",
+          uploaded_by: user?.id ?? null,
+          created_at: new Date().toISOString()
+        });
+      if (fotoErr) {
+        toast({
+          variant: "destructive",
+          title: "Persistência parcial",
+          description: "Upload ok, mas falhou registrar foto (tabela)."
+        });
+      }
+
+      // atualizar carregamentos (numero_nf, data_emissao_nf e status se for aguardando)
+      const newStatus =
+        nfItem.status === "aguardando" ? "em_andamento" : nfItem.status;
+
+      const { error: carrErr } = await supabase
+        .from("carregamentos")
+        .update({
+          numero_nf: nfNumber.trim(),
+          data_emissao_nf: nfDate,
+          status: newStatus,
+          updated_at: new Date().toISOString(),
+          updated_by: user?.id ?? null
+        })
+        .eq("id", carregamentoId);
+
+      if (carrErr) {
+        toast({
+          variant: "destructive",
+          title: "Persistência pendente",
+          description: "NF registrada localmente, banco não atualizado."
+        });
+      }
+
+      // Atualização local
+      setCarregamentos(prev =>
+        prev.map(c =>
+          c.id === carregamentoId
+            ? {
+                ...c,
+                numeroNF: nfNumber.trim(),
+                dataEmissaoNF: nfDate,
+                nfFileUrl: publicUrl,
+                status: newStatus,
+                fotosTotal: c.fotosTotal + 1,
+                photosByType: {
+                  ...c.photosByType,
+                  nota_fiscal: (c.photosByType.nota_fiscal || 0) + 1
+                }
+              }
+            : c
+        )
+      );
+
+      toast({
+        title: "NF registrada",
+        description: `NF ${nfNumber.trim()} anexada com sucesso.`
+      });
+
+      setDialogNFOpen(false);
+      setNFItem(null);
+      setNfUploading(false);
+      setNfNumber("");
+      setNfDate("");
+      setNfFile(null);
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Falha no upload",
+        description: "Não foi possível salvar a NF. Verifique bucket/migrations."
+      });
+      setNfUploading(false);
+    }
+  };
+
+  const getStatusText = (status: StatusCarregamento) => {
     switch (status) {
       case "aguardando":
-        return "secondary";
+        return "Aguardando";
       case "em_andamento":
-        return "default";
+        return "Em Andamento";
       case "concluido":
-        return "default";
+        return "Concluído";
       case "cancelado":
-        return "destructive";
+        return "Cancelado";
       default:
-        return "outline";
+        return status;
     }
   };
 
@@ -603,19 +779,22 @@ const Carregamento = () => {
                         <p className="mt-1 text-sm text-muted-foreground">
                           Horário: <span className="font-medium text-foreground">{carr.horario}</span>
                         </p>
+                        {carr.numeroNF && (
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            NF: <span className="font-medium text-foreground">{carr.numeroNF}</span>
+                          </p>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex flex-col items-end gap-2">
                       <Badge variant={getStatusBadgeVariant(carr.status)}>
-                        {carr.status === "em_andamento"
-                          ? "Em Andamento"
-                          : carr.status.charAt(0).toUpperCase() + carr.status.slice(1)}
+                        {getStatusText(carr.status)}
                       </Badge>
                       <div className="text-xs text-muted-foreground">
                         Fotos: <span className="font-semibold">{carr.fotosTotal}</span>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <Button
                           variant="outline"
                           size="sm"
@@ -623,12 +802,12 @@ const Carregamento = () => {
                           title={
                             canUpload
                               ? "Anexar fotos ao carregamento"
-                              : "Apenas Admin, Armazém ou Logística podem anexar"
+                              : "Sem permissão"
                           }
                           onClick={() => handleOpenDialogUpload(carr)}
                         >
                           <Camera className="h-4 w-4 mr-1" />
-                          Anexar Fotos
+                          Fotos
                         </Button>
                         <Button
                           variant="outline"
@@ -640,7 +819,7 @@ const Carregamento = () => {
                           }
                           title={
                             carr.status === "concluido" || carr.status === "cancelado"
-                              ? "Status final não editável"
+                              ? "Status final"
                               : canUpdateStatus
                               ? "Atualizar Status"
                               : "Sem permissão"
@@ -648,13 +827,36 @@ const Carregamento = () => {
                           onClick={() => handleOpenDialogStatus(carr)}
                         >
                           <RefreshCcw className="h-4 w-4 mr-1" />
-                          Atualizar Status
+                          Status
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!canRegisterNF}
+                          title={
+                            canRegisterNF
+                              ? carr.numeroNF ? "Ver NF" : "Registrar NF"
+                              : "Sem permissão"
+                          }
+                          onClick={() => openNFDialog(carr)}
+                          className={carr.numeroNF ? "border-green-500 text-green-600" : ""}
+                        >
+                          {carr.numeroNF ? (
+                            <>
+                              <FileCheck2 className="h-4 w-4 mr-1" />
+                              Ver NF
+                            </>
+                          ) : (
+                            <>
+                              <FilePlus className="h-4 w-4 mr-1" />
+                              NF Entregue
+                            </>
+                          )}
                         </Button>
                       </div>
                     </div>
                   </div>
 
-                  {/* Indicadores das fotos obrigatórias (opcional) */}
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
                     {REQUIRED_PHOTO_TYPES_FOR_CONCLUDE.map((tipo) => {
                       const qtd = carr.photosByType[tipo] || 0;
@@ -677,18 +879,14 @@ const Carregamento = () => {
         </div>
       </div>
 
-      {/* Dialog Upload */}
+      {/* Dialog Upload Fotos */}
       <Dialog open={dialogUploadOpen} onOpenChange={setDialogUploadOpen}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>
-              Anexar Fotos{" "}
-              {selectedCarregamento
-                ? `— Carregamento #${selectedCarregamento.id}`
-                : ""}
+              Anexar Fotos {selectedCarregamento ? `— Carregamento #${selectedCarregamento.id}` : ""}
             </DialogTitle>
           </DialogHeader>
-
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <label className="text-sm font-medium">Tipo da Foto</label>
@@ -705,7 +903,6 @@ const Carregamento = () => {
                 </SelectContent>
               </Select>
             </div>
-
             <div className="space-y-2">
               <label className="text-sm font-medium">
                 Selecionar Imagens (máx. 10) / Câmera (mobile)
@@ -719,31 +916,27 @@ const Carregamento = () => {
                 className="text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Formatos aceitos: jpg, jpeg, png, heic
+                Formatos aceitos: {ALLOWED_EXTENSIONS.join(", ")}
               </p>
             </div>
-
             {previews.length > 0 && (
               <div className="grid grid-cols-3 gap-2">
                 {previews.map((src, idx) => (
-                  <div key={idx} className="relative">
-                    <img
-                      src={src}
-                      alt={`preview-${idx}`}
-                      className="h-24 w-full rounded object-cover border"
-                    />
-                  </div>
+                  <img
+                    key={idx}
+                    src={src}
+                    alt={`preview-${idx}`}
+                    className="h-24 w-full rounded object-cover border"
+                  />
                 ))}
               </div>
             )}
-
             {files.length > 0 && (
               <p className="text-xs text-muted-foreground">
                 {files.length} arquivo(s) pronto(s) para upload.
               </p>
             )}
           </div>
-
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogUploadOpen(false)} disabled={uploading}>
               Cancelar
@@ -764,55 +957,35 @@ const Carregamento = () => {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>
-              Atualizar Status{" "}
-              {statusItem ? `— Carregamento #${statusItem.id}` : ""}
+              Atualizar Status {statusItem ? `— Carregamento #${statusItem.id}` : ""}
             </DialogTitle>
           </DialogHeader>
-
           {statusItem && (
             <div className="space-y-4 py-2">
-              <div className="space-y-2 text-sm">
-                <p>
-                  Status atual:{" "}
-                  <span className="font-medium">
-                    {statusItem.status === "em_andamento"
-                      ? "Em Andamento"
-                      : statusItem.status.charAt(0).toUpperCase() +
-                        statusItem.status.slice(1)}
-                  </span>
-                </p>
-                <p className="text-muted-foreground">
-                  Fluxo: aguardando → em_andamento → concluido (ou cancelado a qualquer momento)
-                </p>
+              <div className="space-y-1 text-sm">
+                <p>Status atual: <span className="font-medium">{getStatusText(statusItem.status)}</span></p>
+                <p className="text-muted-foreground">Fluxo: aguardando → em_andamento → concluido (ou cancelado)</p>
               </div>
-
               <div className="space-y-2">
                 <label className="text-sm font-medium">Novo Status</label>
-                <Select
-                  value={statusTarget}
-                  onValueChange={(v) => setStatusTarget(v as StatusCarregamento)}
-                >
+                <Select value={statusTarget} onValueChange={(v) => setStatusTarget(v as StatusCarregamento)}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Selecione o status" />
+                    <SelectValue placeholder="Selecione" />
                   </SelectTrigger>
                   <SelectContent>
-                    {nextValidStatuses(statusItem.status).map((s) => (
+                    {nextValidStatuses(statusItem.status).map(s => (
                       <SelectItem key={s} value={s}>
-                        {s === "em_andamento"
-                          ? "Em Andamento"
-                          : s.charAt(0).toUpperCase() + s.slice(1)}
+                        {getStatusText(s)}
                       </SelectItem>
                     ))}
-                    {/* cancelar sempre disponível se não for final */}
-                    {statusItem.status !== "concluido" &&
-                      statusItem.status !== "cancelado" &&
+                    {/* Garantir cancelado sempre disponível se não final */}
+                    {statusItem.status !== "concluido" && statusItem.status !== "cancelado" &&
                       !nextValidStatuses(statusItem.status).includes("cancelado") && (
                         <SelectItem value="cancelado">Cancelado</SelectItem>
                       )}
                   </SelectContent>
                 </Select>
               </div>
-
               <div className="space-y-2">
                 <label className="text-sm font-medium">
                   Observação {statusTarget === "cancelado" && "(obrigatória)"}
@@ -820,35 +993,30 @@ const Carregamento = () => {
                 <Textarea
                   value={statusObservation}
                   onChange={(e) => setStatusObservation(e.target.value)}
-                  placeholder="Detalhes da mudança de status"
+                  placeholder="Detalhes da mudança"
                 />
               </div>
-
               {statusTarget === "concluido" && (
                 <div className="rounded border p-3 text-xs">
-                  <p className="font-medium mb-1">Pré-requisitos para concluir:</p>
+                  <p className="font-medium mb-1">Pré-requisitos:</p>
                   <ul className="list-disc pl-4 space-y-1">
-                    <li>1+ foto de antes do carregamento</li>
-                    <li>1+ foto de após o carregamento</li>
-                    <li>1+ foto de nota fiscal</li>
+                    <li>Foto antes</li>
+                    <li>Foto após</li>
+                    <li>Foto nota fiscal</li>
                   </ul>
                   {!verifyRequiredPhotos(statusItem) && (
                     <p className="mt-2 text-destructive">
-                      Fotos obrigatórias ainda incompletas.
+                      Ainda faltam fotos obrigatórias.
                     </p>
                   )}
                 </div>
               )}
             </div>
           )}
-
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => {
-                setDialogStatusOpen(false);
-                setStatusItem(null);
-              }}
+              onClick={() => { setDialogStatusOpen(false); setStatusItem(null); }}
               disabled={statusLoading}
             >
               Cancelar
@@ -865,6 +1033,109 @@ const Carregamento = () => {
             >
               {statusLoading ? "Atualizando..." : "Salvar"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog NF Entregue / Ver NF */}
+      <Dialog open={dialogNFOpen} onOpenChange={setDialogNFOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {nfViewMode ? "Nota Fiscal" : "Registrar Nota Fiscal"}
+              {nfItem ? ` — Carregamento #${nfItem.id}` : ""}
+            </DialogTitle>
+          </DialogHeader>
+
+          {nfItem && (
+            <div className="space-y-4 py-2 text-sm">
+              {nfViewMode ? (
+                <>
+                  <p><span className="text-muted-foreground">NF:</span> <span className="font-medium">{nfItem.numeroNF}</span></p>
+                  <p><span className="text-muted-foreground">Data Emissão:</span> <span className="font-medium">{nfItem.dataEmissaoNF}</span></p>
+                  {nfItem.nfFileUrl && (
+                    nfItem.nfFileUrl.toLowerCase().endsWith(".pdf") ? (
+                      <a
+                        href={nfItem.nfFileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline"
+                      >
+                        Abrir PDF da NF
+                      </a>
+                    ) : (
+                      <img
+                        src={nfItem.nfFileUrl}
+                        alt="NF"
+                        className="rounded border max-h-60 object-contain"
+                      />
+                    )
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Número da NF</label>
+                    <Input
+                      value={nfNumber}
+                      onChange={(e) => setNfNumber(e.target.value)}
+                      placeholder="Ex.: 123456-XYZ"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Data de Emissão</label>
+                    <Input
+                      type="date"
+                      value={nfDate}
+                      max={new Date().toISOString().split("T")[0]}
+                      onChange={(e) => setNfDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">
+                      Arquivo da NF (imagem ou PDF)
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      onChange={(e) => handleNFFileChange(e.target.files?.[0] || null)}
+                      className="text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Formatos: {ALLOWED_NF_EXTENSIONS.join(", ")}
+                    </p>
+                    {nfFile && (
+                      <p className="text-xs text-muted-foreground">
+                        Selecionado: {nfFile.name}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDialogNFOpen(false);
+                setNFItem(null);
+                setNfViewMode(false);
+              }}
+              disabled={nfUploading}
+            >
+              Fechar
+            </Button>
+            {!nfViewMode && (
+              <Button
+                className="bg-gradient-primary"
+                onClick={handleSaveNF}
+                disabled={nfUploading || !nfItem}
+              >
+                {nfUploading ? "Salvando..." : "Salvar NF"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
