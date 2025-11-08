@@ -9,15 +9,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 
 type StockStatus = "normal" | "baixo";
+type Unidade = "t" | "kg";
 
 interface StockItem {
   id: number;
   produto: string;
   armazem: string;
   quantidade: number;
-  unidade: "t" | "kg";
+  unidade: Unidade;
   status: StockStatus;
 }
 
@@ -25,7 +28,9 @@ const computeStatus = (qtd: number): StockStatus => (qtd < 10 ? "baixo" : "norma
 
 const Estoque = () => {
   const { toast } = useToast();
+  const { hasRole, user } = useAuth();
 
+  // Lista mockada de estoque (local, sem persistência)
   const [estoque, setEstoque] = useState<StockItem[]>([
     { id: 1, produto: "Ureia", armazem: "São Paulo", quantidade: 45.5, unidade: "t", status: "normal" },
     { id: 2, produto: "NPK 20-05-20", armazem: "Rio de Janeiro", quantidade: 32.0, unidade: "t", status: "normal" },
@@ -34,22 +39,17 @@ const Estoque = () => {
     { id: 5, produto: "MAP", armazem: "Curitiba", quantidade: 23.8, unidade: "t", status: "normal" },
   ]);
 
+  // Dialog "Novo Produto"
   const [dialogOpen, setDialogOpen] = useState(false);
-
   const [novoProduto, setNovoProduto] = useState({
     nome: "",
     armazem: "",
     quantidade: "",
-    unidade: "t" as "t" | "kg",
+    unidade: "t" as Unidade,
   });
 
-  const resetForm = () => {
-    setNovoProduto({
-      nome: "",
-      armazem: "",
-      quantidade: "",
-      unidade: "t",
-    });
+  const resetFormNovoProduto = () => {
+    setNovoProduto({ nome: "", armazem: "", quantidade: "", unidade: "t" });
   };
 
   const handleCreateProduto = async () => {
@@ -91,8 +91,116 @@ const Estoque = () => {
       description: `${item.produto} adicionado em ${item.armazem} com ${item.quantidade} ${item.unidade}.`,
     });
 
-    resetForm();
+    resetFormNovoProduto();
     setDialogOpen(false);
+  };
+
+  // Dialog "Atualizar"
+  const [dialogUpdateOpen, setDialogUpdateOpen] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<StockItem | null>(null);
+  const [updateForm, setUpdateForm] = useState({
+    currentQty: 0,
+    newQty: "",
+    reason: "",
+  });
+
+  const openUpdateDialog = (item: StockItem) => {
+    setSelectedItem(item);
+    setUpdateForm({
+      currentQty: item.quantidade,
+      newQty: String(item.quantidade),
+      reason: "",
+    });
+    setDialogUpdateOpen(true);
+  };
+
+  const handleSaveUpdate = async () => {
+    if (!hasRole("logistica")) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Somente usuários com perfil de Logística podem atualizar o estoque.",
+      });
+      return;
+    }
+
+    const newQtyNum = Number(updateForm.newQty);
+    if (Number.isNaN(newQtyNum) || newQtyNum < 0) {
+      toast({
+        variant: "destructive",
+        title: "Quantidade inválida",
+        description: "A nova quantidade não pode ser negativa.",
+      });
+      return;
+    }
+
+    if (!updateForm.reason) {
+      toast({
+        variant: "destructive",
+        title: "Motivo obrigatório",
+        description: "Selecione um motivo para a alteração.",
+      });
+      return;
+    }
+
+    if (!selectedItem) return;
+
+    // Atualiza localmente
+    setEstoque((prev) =>
+      prev.map((e) =>
+        e.id === selectedItem.id
+          ? { ...e, quantidade: newQtyNum, status: computeStatus(newQtyNum) }
+          : e
+      )
+    );
+
+    toast({
+      title: "Estoque atualizado",
+      description: `Operação: ${updateForm.reason}. Quantidade alterada para ${newQtyNum}.`,
+    });
+
+    // Tenta persistir no backend (quando estrutura existir)
+    // Mantém UX mesmo se falhar (apenas informa)
+    try {
+      // Preferência por RPC (quando existir):
+      // const { error } = await supabase.rpc('update_stock_quantity', {
+      //   p_item_id: selectedItem.id,
+      //   p_new_qty: newQtyNum,
+      //   p_reason: updateForm.reason,
+      //   p_updated_by: user?.id ?? null,
+      // });
+
+      // Fallback: update direto em tabela hipotética 'stock_balances'
+      const { error } = await supabase
+        .from("stock_balances")
+        .update({
+          quantidade_atual: newQtyNum,
+          updated_by: user?.id ?? null,
+          updated_at: new Date().toISOString(),
+          motivo: updateForm.reason,
+        })
+        .eq("id", selectedItem.id);
+
+      if (error) {
+        // Apenas informa, sem reverter atualização local
+        toast({
+          variant: "destructive",
+          title: "Persistência pendente",
+          description:
+            "Não foi possível salvar no banco agora. As migrations/estrutura podem estar faltando. A atualização local foi mantida.",
+        });
+      }
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Persistência pendente",
+        description:
+          "Não foi possível salvar no banco agora. As migrations/estrutura podem estar faltando. A atualização local foi mantida.",
+      });
+    }
+
+    setDialogUpdateOpen(false);
+    setSelectedItem(null);
   };
 
   return (
@@ -152,7 +260,7 @@ const Estoque = () => {
                     <Label htmlFor="unidade">Unidade</Label>
                     <Select
                       value={novoProduto.unidade}
-                      onValueChange={(v) => setNovoProduto((s) => ({ ...s, unidade: v as "t" | "kg" }))}
+                      onValueChange={(v) => setNovoProduto((s) => ({ ...s, unidade: v as Unidade }))}
                     >
                       <SelectTrigger id="unidade">
                         <SelectValue placeholder="Selecione a unidade" />
@@ -205,7 +313,15 @@ const Estoque = () => {
                     <Badge variant={item.status === "baixo" ? "destructive" : "secondary"}>
                       {item.status === "baixo" ? "Estoque Baixo" : "Normal"}
                     </Badge>
-                    <Button variant="outline" size="sm">
+
+                    {/* Atualizar */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openUpdateDialog(item)}
+                      disabled={!hasRole("logistica")}
+                      title={!hasRole("logistica") ? "Apenas Logística pode atualizar" : "Atualizar quantidade"}
+                    >
                       Atualizar
                     </Button>
                   </div>
@@ -215,6 +331,71 @@ const Estoque = () => {
           ))}
         </div>
       </div>
+
+      {/* Dialog Atualizar Quantidade */}
+      <Dialog open={dialogUpdateOpen} onOpenChange={setDialogUpdateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Atualizar Quantidade</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div>
+              <Label>Produto</Label>
+              <p className="text-sm text-muted-foreground">
+                {selectedItem ? `${selectedItem.produto} — ${selectedItem.armazem}` : "-"}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="qtd_atual">Quantidade atual</Label>
+                <Input id="qtd_atual" value={updateForm.currentQty} readOnly />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="nova_qtd">Nova quantidade</Label>
+                <Input
+                  id="nova_qtd"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={updateForm.newQty}
+                  onChange={(e) => setUpdateForm((s) => ({ ...s, newQty: e.target.value }))}
+                  placeholder="Ex.: 50"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="motivo">Motivo da alteração</Label>
+              <Select
+                value={updateForm.reason}
+                onValueChange={(v) => setUpdateForm((s) => ({ ...s, reason: v }))}
+              >
+                <SelectTrigger id="motivo">
+                  <SelectValue placeholder="Selecione o motivo" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Entrada">Entrada</SelectItem>
+                  <SelectItem value="Saída">Saída</SelectItem>
+                  <SelectItem value="Ajuste de Inventário">Ajuste de Inventário</SelectItem>
+                  <SelectItem value="Transferência">Transferência</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogUpdateOpen(false)}>
+              Cancelar
+            </Button>
+            <Button className="bg-gradient-primary" onClick={handleSaveUpdate}>
+              Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
