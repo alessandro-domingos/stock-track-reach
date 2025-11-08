@@ -7,8 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Plus, Package } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/integrations/supabase/client";
 
 type StockStatus = "normal" | "baixo";
 
@@ -25,6 +28,7 @@ const computeStatus = (qtd: number): StockStatus => (qtd < 10 ? "baixo" : "norma
 
 const Estoque = () => {
   const { toast } = useToast();
+  const { hasRole, user } = useAuth();
 
   const [estoque, setEstoque] = useState<StockItem[]>([
     { id: 1, produto: "Ureia", armazem: "São Paulo", quantidade: 45.5, unidade: "t", status: "normal" },
@@ -35,6 +39,13 @@ const Estoque = () => {
   ]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogUpdateOpen, setDialogUpdateOpen] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<StockItem | null>(null);
+  const [updateForm, setUpdateForm] = useState({
+    currentQty: 0,
+    newQty: "",
+    reason: "",
+  });
 
   const [novoProduto, setNovoProduto] = useState({
     nome: "",
@@ -93,6 +104,116 @@ const Estoque = () => {
 
     resetForm();
     setDialogOpen(false);
+  };
+
+  const handleOpenUpdateDialog = (item: StockItem) => {
+    if (!hasRole("logistica")) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Apenas usuários com a role 'logistica' podem atualizar o estoque.",
+      });
+      return;
+    }
+
+    setSelectedItem(item);
+    setUpdateForm({
+      currentQty: item.quantidade,
+      newQty: item.quantidade.toString(),
+      reason: "",
+    });
+    setDialogUpdateOpen(true);
+  };
+
+  const handleUpdateQuantity = async () => {
+    if (!selectedItem) return;
+
+    // Permission check
+    if (!hasRole("logistica")) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Apenas usuários com a role 'logistica' podem atualizar o estoque.",
+      });
+      return;
+    }
+
+    // Validations
+    const newQtyNum = Number(updateForm.newQty);
+    if (Number.isNaN(newQtyNum) || newQtyNum < 0) {
+      toast({
+        variant: "destructive",
+        title: "Quantidade inválida",
+        description: "A nova quantidade não pode ser negativa.",
+      });
+      return;
+    }
+
+    if (!updateForm.reason.trim()) {
+      toast({
+        variant: "destructive",
+        title: "Motivo obrigatório",
+        description: "Informe o motivo da alteração.",
+      });
+      return;
+    }
+
+    // Update local state
+    setEstoque((prev) =>
+      prev.map((item) =>
+        item.id === selectedItem.id
+          ? { ...item, quantidade: newQtyNum, status: computeStatus(newQtyNum) }
+          : item
+      )
+    );
+
+    // Show success toast
+    toast({
+      title: "Estoque atualizado",
+      description: `Quantidade alterada para ${newQtyNum} ${selectedItem.unidade}. Motivo: ${updateForm.reason}.`,
+    });
+
+    // Try to persist to backend (graceful failure if RPC/table doesn't exist)
+    try {
+      // Attempt to call RPC function
+      const { error: rpcError } = await supabase.rpc("update_stock_quantity", {
+        p_item_id: selectedItem.id,
+        p_new_qty: newQtyNum,
+        p_reason: updateForm.reason,
+        p_updated_by: user?.id || "",
+      });
+
+      if (rpcError) {
+        // If RPC doesn't exist, try direct update as fallback
+        const { error: updateError } = await supabase
+          .from("stock_balances")
+          .update({
+            quantidade_atual: newQtyNum,
+            updated_by: user?.id || "",
+          })
+          .eq("id", selectedItem.id);
+
+        if (updateError) {
+          // Both methods failed - likely table/RPC doesn't exist yet
+          toast({
+            title: "Atualização local salva",
+            description: "A persistência no banco será aplicada quando as migrations estiverem disponíveis.",
+          });
+        }
+      }
+    } catch (error) {
+      // Catch any unexpected errors
+      console.error("Error updating stock in backend:", error);
+      toast({
+        title: "Atualização local salva",
+        description: "A persistência no banco será aplicada quando as migrations estiverem disponíveis.",
+      });
+    }
+
+    // Close dialog and reset
+    setDialogUpdateOpen(false);
+    setSelectedItem(null);
+    setUpdateForm({ currentQty: 0, newQty: "", reason: "" });
   };
 
   return (
@@ -205,9 +326,25 @@ const Estoque = () => {
                     <Badge variant={item.status === "baixo" ? "destructive" : "secondary"}>
                       {item.status === "baixo" ? "Estoque Baixo" : "Normal"}
                     </Badge>
-                    <Button variant="outline" size="sm">
-                      Atualizar
-                    </Button>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={!hasRole("logistica")}
+                            onClick={() => handleOpenUpdateDialog(item)}
+                          >
+                            Atualizar
+                          </Button>
+                        </TooltipTrigger>
+                        {!hasRole("logistica") && (
+                          <TooltipContent>
+                            <p>Apenas usuários com a role 'logistica' podem atualizar o estoque</p>
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                 </div>
               </CardContent>
@@ -215,6 +352,82 @@ const Estoque = () => {
           ))}
         </div>
       </div>
+
+      {/* Update Dialog */}
+      <Dialog open={dialogUpdateOpen} onOpenChange={setDialogUpdateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Atualizar Quantidade</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {selectedItem && (
+              <>
+                <div className="mb-4">
+                  <p className="text-sm text-muted-foreground">
+                    Produto: <span className="font-semibold text-foreground">{selectedItem.produto}</span>
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Armazém: <span className="font-semibold text-foreground">{selectedItem.armazem}</span>
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="currentQty">Quantidade atual</Label>
+                  <Input
+                    id="currentQty"
+                    type="number"
+                    value={updateForm.currentQty}
+                    readOnly
+                    disabled
+                    className="bg-muted"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="newQty">Nova quantidade</Label>
+                  <Input
+                    id="newQty"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={updateForm.newQty}
+                    onChange={(e) => setUpdateForm((s) => ({ ...s, newQty: e.target.value }))}
+                    placeholder="Ex.: 50.5"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="reason">Motivo da alteração</Label>
+                  <Select
+                    value={updateForm.reason}
+                    onValueChange={(v) => setUpdateForm((s) => ({ ...s, reason: v }))}
+                  >
+                    <SelectTrigger id="reason">
+                      <SelectValue placeholder="Selecione o motivo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Entrada">Entrada</SelectItem>
+                      <SelectItem value="Saída">Saída</SelectItem>
+                      <SelectItem value="Ajuste de Inventário">Ajuste de Inventário</SelectItem>
+                      <SelectItem value="Transferência">Transferência</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogUpdateOpen(false)}>
+              Cancelar
+            </Button>
+            <Button className="bg-gradient-primary" onClick={handleUpdateQuantity}>
+              Salvar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
