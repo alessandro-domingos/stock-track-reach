@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Calendar, Clock, User, Truck, Pencil } from "lucide-react";
+import { Plus, Calendar, Clock, User, Truck, Pencil, XCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -40,6 +40,8 @@ interface ReleaseOption {
   quantidade?: number;
   quantidade_retirada?: number;
   status?: string;
+  // Coluna opcional que podemos usar para liberar reservas, se existir
+  quantidade_reservada?: number;
 }
 
 /* Utilitários de data e máscara/validação */
@@ -57,7 +59,6 @@ const formatDateBRFromISO = (isoDate: string) => {
 };
 
 const parseDateBRtoISO = (brDate: string) => {
-  // brDate: dd/mm/yyyy -> yyyy-mm-dd
   const [dd, mm, yyyy] = brDate.split("/");
   return `${yyyy}-${mm}-${dd}`;
 };
@@ -121,7 +122,7 @@ const Agendamentos = () => {
 
   const canCreate = hasRole("admin") || hasRole("logistica") || hasRole("cliente");
 
-  /* Mock inicial (adicionamos releaseId e created_by para testes de permissão) */
+  /* Mock inicial (com releaseId e created_by para testes de permissão) */
   const [agendamentos, setAgendamentos] = useState<AgendamentoItem[]>([
     {
       id: 1,
@@ -193,7 +194,7 @@ const Agendamentos = () => {
       try {
         const { data, error } = await supabase
           .from("liberacoes")
-          .select("id, pedido, cliente, quantidade, quantidade_retirada, status, product_id");
+          .select("id, pedido, cliente, quantidade, quantidade_retirada, quantidade_reservada, status, product_id");
         if (error) throw error;
 
         const filtered = (data || []).filter(
@@ -384,7 +385,7 @@ const Agendamentos = () => {
     setDialogOpen(false);
   };
 
-  /* Botão Editar: permissões e diálogo */
+  /* Botão Editar (existente) */
   const canEdit = (a: AgendamentoItem) => {
     if (a.status === "concluido" || a.status === "cancelado") return false;
     const isOwner = a.created_by && user?.id && a.created_by === user.id;
@@ -429,7 +430,7 @@ const Agendamentos = () => {
       driverName: a.motorista,
       driverCPF: a.documento,
       truckPlate: a.placa,
-      truckType: "", // manter vazio caso não exista no mock
+      truckType: "",
       notes: "",
       originalQty: a.quantidade,
       originalStatus: a.status,
@@ -438,7 +439,6 @@ const Agendamentos = () => {
     setEditOpen(true);
   };
 
-  /* Função: recalcular quantidade_retirada na liberação */
   const recalcLiberacaoRetirada = async (releaseId: string | number) => {
     try {
       const { data: ags, error } = await supabase
@@ -448,7 +448,6 @@ const Agendamentos = () => {
 
       if (error) throw error;
 
-      // Contabiliza retiradas de agendamentos com status que indicam retirada realizada
       const retiradaStatuses = ["carregado", "entregue", "concluido"];
       const totalRetirado = (ags || []).reduce((sum: number, row: any) => {
         const st = String(row.status || "").toLowerCase();
@@ -465,7 +464,6 @@ const Agendamentos = () => {
 
       if (upErr) throw upErr;
     } catch {
-      // Apenas informa; não bloqueia o fluxo
       toast({
         variant: "destructive",
         title: "Recalcular retirada pendente",
@@ -478,7 +476,6 @@ const Agendamentos = () => {
   const handleSaveEdit = async () => {
     if (!editItem) return;
 
-    // Revalidar permissões
     if (!canEdit(editItem)) {
       toast({
         variant: "destructive",
@@ -488,7 +485,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Bloquear para concluído/cancelado
     if (editForm.originalStatus === "concluido" || editForm.originalStatus === "cancelado") {
       toast({
         variant: "destructive",
@@ -498,7 +494,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Validações iguais ao criar
     if (!editForm.date || !editForm.time || !editForm.quantity || !editForm.driverName.trim() || !editForm.driverCPF || !editForm.truckPlate) {
       toast({
         variant: "destructive",
@@ -527,7 +522,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Checagem de disponível considerando edição (devolve a quantidade original)
     if (editForm.releaseId) {
       const rel = releasesOptions.find((r) => String(r.id) === String(editForm.releaseId));
       if (rel) {
@@ -562,7 +556,6 @@ const Agendamentos = () => {
       return;
     }
 
-    // Atualizar localmente
     setAgendamentos((prev) =>
       prev.map((a) =>
         a.id === editForm.id
@@ -574,13 +567,11 @@ const Agendamentos = () => {
               motorista: editForm.driverName.trim(),
               documento: editForm.driverCPF,
               placa: editForm.truckPlate.toUpperCase(),
-              // truckType/notes não existem no mock de exibição; ficam persistidos apenas no banco
             }
           : a
       )
     );
 
-    // Persistir no backend
     try {
       const isoDateTime = `${editForm.date}T${editForm.time}:00.000Z`;
       const { error } = await supabase
@@ -617,13 +608,132 @@ const Agendamentos = () => {
       });
     }
 
-    // Se quantidade alterou, recalcular quantidade_retirada na liberação
     if (editForm.releaseId && newQty !== Number(editForm.originalQty || 0)) {
       await recalcLiberacaoRetirada(editForm.releaseId);
     }
 
     setEditOpen(false);
     setEditItem(null);
+  };
+
+  /* --------- Cancelar Agendamento --------- */
+  const canCancel = (a: AgendamentoItem) => {
+    if (a.status !== "confirmado") return false;
+    const isOwner = a.created_by && user?.id && a.created_by === user.id;
+    return Boolean(isOwner || hasRole("admin") || hasRole("logistica"));
+  };
+
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelItem, setCancelItem] = useState<AgendamentoItem | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+
+  const openCancel = (a: AgendamentoItem) => {
+    if (!canCancel(a)) {
+      toast({
+        variant: "destructive",
+        title: "Permissão insuficiente",
+        description: "Apenas o criador, Admin ou Logística podem cancelar este agendamento.",
+      });
+      return;
+    }
+    setCancelItem(a);
+    setCancelReason("");
+    setCancelOpen(true);
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!cancelItem) return;
+    if (!cancelReason.trim()) {
+      toast({
+        variant: "destructive",
+        title: "Motivo obrigatório",
+        description: "Informe o motivo do cancelamento.",
+      });
+      return;
+    }
+
+    // Atualiza localmente
+    setAgendamentos((prev) =>
+      prev.map((a) => (a.id === cancelItem.id ? { ...a, status: "cancelado" } : a))
+    );
+
+    // Persistir atualização do agendamento
+    try {
+      const { error } = await supabase
+        .from("agendamentos")
+        .update({
+          status: "cancelado",
+          observacao_cancelamento: cancelReason.trim(),
+          updated_by: user?.id ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", cancelItem.id);
+
+      if (error) {
+        toast({
+          variant: "destructive",
+          title: "Persistência pendente",
+          description:
+            "Cancelamento aplicado localmente; não foi possível atualizar o banco agora.",
+        });
+      }
+    } catch {
+      toast({
+        variant: "destructive",
+        title: "Persistência pendente",
+        description:
+          "Cancelamento aplicado localmente; não foi possível atualizar o banco agora.",
+      });
+    }
+
+    // Liberar quantidade novamente na liberação (sem mexer em quantidade_retirada)
+    // Tentativa: ajustar uma coluna opcional 'quantidade_reservada' se existir
+    if (cancelItem.releaseId) {
+      try {
+        const { data: lib, error: selErr } = await supabase
+          .from("liberacoes")
+          .select("id, quantidade_reservada")
+          .eq("id", cancelItem.releaseId)
+          .maybeSingle();
+
+        if (!selErr && lib && typeof lib.quantidade_reservada !== "undefined") {
+          const atual = Number(lib.quantidade_reservada || 0);
+          const novo = Math.max(0, atual - Number(cancelItem.quantidade || 0));
+          const { error: upErr } = await supabase
+            .from("liberacoes")
+            .update({
+              quantidade_reservada: novo,
+              updated_by: user?.id ?? null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", cancelItem.releaseId);
+          if (upErr) {
+            toast({
+              variant: "destructive",
+              title: "Liberação não atualizada",
+              description:
+                "Não foi possível ajustar a reserva na liberação. Verifique as migrations.",
+            });
+          }
+        }
+      } catch {
+        toast({
+          variant: "destructive",
+          title: "Liberação não atualizada",
+          description:
+            "Falha ao tentar liberar a quantidade na liberação. Verifique o backend.",
+        });
+      }
+    }
+
+    toast({
+      title: "Agendamento cancelado",
+      description: "O agendamento foi marcado como cancelado.",
+    });
+
+    setCancelOpen(false);
+    setCancelItem(null);
+    setCancelReason("");
   };
 
   return (
@@ -781,13 +891,17 @@ const Agendamentos = () => {
         <div className="grid gap-4">
           {agendamentos.map((agend) => {
             const disabledByStatus = agend.status === "concluido" || agend.status === "cancelado";
-            const allowed = canEdit(agend);
-            const disableEdit = disabledByStatus || !allowed;
+            const allowedEdit = canEdit(agend);
+            const disableEdit = disabledByStatus || !allowedEdit;
             const titleEdit = disabledByStatus
               ? "Agendamento concluído/cancelado não pode ser editado"
-              : !allowed
+              : !allowedEdit
                 ? "Apenas criador, Admin ou Logística podem editar"
                 : "Editar agendamento";
+
+            const showCancelButton = agend.status === "confirmado";
+            const allowedCancel = canCancel(agend);
+            const titleCancel = allowedCancel ? "Cancelar agendamento" : "Apenas criador, Admin ou Logística podem cancelar";
 
             return (
               <Card key={agend.id} className="transition-all hover:shadow-md">
@@ -823,6 +937,18 @@ const Agendamentos = () => {
                           <Pencil className="h-4 w-4 mr-2" />
                           Editar
                         </Button>
+                        {showCancelButton && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => openCancel(agend)}
+                            disabled={!allowedCancel}
+                            title={titleCancel}
+                          >
+                            <XCircle className="h-4 w-4 mr-2" />
+                            Cancelar
+                          </Button>
+                        )}
                       </div>
                     </div>
 
@@ -962,6 +1088,37 @@ const Agendamentos = () => {
               </DialogFooter>
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Cancelar Agendamento */}
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cancelar Agendamento</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Confirme o cancelamento deste agendamento. Informe o motivo (obrigatório).
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="cancel_reason">Motivo do cancelamento</Label>
+              <Textarea
+                id="cancel_reason"
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                placeholder="Descreva o motivo"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelOpen(false)}>
+              Voltar
+            </Button>
+            <Button className="bg-gradient-primary" onClick={handleConfirmCancel}>
+              Confirmar Cancelamento
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
