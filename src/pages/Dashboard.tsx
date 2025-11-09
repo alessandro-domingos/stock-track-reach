@@ -164,12 +164,12 @@ const Dashboard = () => {
   });
 
   const { data: carregandoCount } = useQuery({
-    queryKey: ["carregamentos-em-andamento-count"],
+    queryKey: ["carregamentos-carregando-count"],
     queryFn: async () => {
       const { count, error } = await supabase
         .from("carregamentos")
         .select("id", { count: "exact", head: true })
-        .eq("status", "em_andamento");
+        .eq("status", "carregando");
       if (error) throw error;
       return count ?? 0;
     },
@@ -177,12 +177,12 @@ const Dashboard = () => {
   });
 
   const { data: baixoEstoqueCount } = useQuery({
-    queryKey: ["stock-baixo-count"],
+    queryKey: ["estoque-baixo-count"],
     queryFn: async () => {
       const { count, error } = await supabase
-        .from("stock_balances")
+        .from("estoque")
         .select("id", { count: "exact", head: true })
-        .lt("quantidade_atual", 10);
+        .lt("quantidade", 10);
       if (error) throw error;
       return count ?? 0;
     },
@@ -262,12 +262,12 @@ const Dashboard = () => {
   // - Estoque baixo (lista)
   // - Liberações atrasadas: status pendente e created_at < hoje
   const { data: lowStocks } = useQuery({
-    queryKey: ["stock-baixo-list"],
+    queryKey: ["estoque-baixo-list"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("stock_balances")
-        .select("id,product_id,warehouse_id,quantidade_atual,updated_at")
-        .lt("quantidade_atual", 10)
+        .from("estoque")
+        .select("id,produto_id,armazem_id,quantidade,updated_at")
+        .lt("quantidade", 10)
         .limit(20);
       if (error) throw error;
       return data ?? [];
@@ -315,7 +315,7 @@ const Dashboard = () => {
           <CardContent className="p-4">
             <div className="text-sm text-muted-foreground">Carregamentos em Andamento</div>
             <div className="mt-1 text-3xl font-bold">{carregandoCount ?? 0}</div>
-            <div className="text-xs text-muted-foreground">Status em_andamento</div>
+            <div className="text-xs text-muted-foreground">Status carregando</div>
           </CardContent>
         </Card>
         <Card>
@@ -377,8 +377,8 @@ const Dashboard = () => {
                   )}
                   {(lowStocks ?? []).map((s: any) => (
                     <div key={s.id} className="text-xs flex items-center justify-between rounded border p-2">
-                      <div>Produto #{s.product_id} • Armazém #{s.warehouse_id}</div>
-                      <Badge variant="destructive">{Number(s.quantidade_atual ?? 0)}</Badge>
+                      <div>Produto #{s.produto_id} • Armazém #{s.armazem_id}</div>
+                      <Badge variant="destructive">{Number(s.quantidade ?? 0)}</Badge>
                     </div>
                   ))}
                 </div>
