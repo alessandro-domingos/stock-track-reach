@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Users, UserPlus, Shield } from "lucide-react";
+import { Users, UserPlus, Shield, Key } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
@@ -31,6 +31,9 @@ const Admin = () => {
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<UserRole>("cliente");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [resetPasswordDialogOpen, setResetPasswordDialogOpen] = useState(false);
+  const [resetPasswordEmail, setResetPasswordEmail] = useState("");
+  const [resetPasswordValue, setResetPasswordValue] = useState("");
   const { toast } = useToast();
   const { hasRole } = useAuth();
 
@@ -127,6 +130,57 @@ const Admin = () => {
       });
       fetchUsers();
     }
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetPasswordValue || resetPasswordValue.length < 6) {
+      toast({
+        variant: "destructive",
+        title: "Erro",
+        description: "A senha deve ter pelo menos 6 caracteres"
+      });
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.functions.invoke("reset-password", {
+        body: {
+          email: resetPasswordEmail,
+          newPassword: resetPasswordValue,
+        },
+      });
+
+      if (error) {
+        toast({
+          variant: "destructive",
+          title: "Erro ao redefinir senha",
+          description: error.message || "Falha no servidor"
+        });
+        return;
+      }
+
+      if (data?.success) {
+        toast({
+          title: "Senha redefinida!",
+          description: `A senha de ${resetPasswordEmail} foi atualizada com sucesso`
+        });
+        setResetPasswordDialogOpen(false);
+        setResetPasswordEmail("");
+        setResetPasswordValue("");
+      }
+    } catch (err: any) {
+      toast({
+        variant: "destructive",
+        title: "Erro ao redefinir senha",
+        description: err.message || "Erro desconhecido"
+      });
+    }
+  };
+
+  const openResetPasswordDialog = (email: string) => {
+    setResetPasswordEmail(email);
+    setResetPasswordValue("");
+    setResetPasswordDialogOpen(true);
   };
 
   const getRoleBadgeVariant = (role: string) => {
@@ -282,6 +336,15 @@ const Admin = () => {
                         ))}
                       </div>
                       
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openResetPasswordDialog(user.email)}
+                      >
+                        <Key className="mr-2 h-4 w-4" />
+                        Redefinir Senha
+                      </Button>
+
                       <Select
                         value={user.roles[0] || 'cliente'}
                         onValueChange={(value) => handleUpdateUserRole(user.id, value as UserRole)}
@@ -305,6 +368,42 @@ const Admin = () => {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={resetPasswordDialogOpen} onOpenChange={setResetPasswordDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Redefinir Senha</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Email do Usuário</Label>
+              <Input
+                value={resetPasswordEmail}
+                disabled
+                className="bg-muted"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="newPassword">Nova Senha</Label>
+              <Input
+                id="newPassword"
+                type="password"
+                value={resetPasswordValue}
+                onChange={(e) => setResetPasswordValue(e.target.value)}
+                placeholder="Digite a nova senha"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetPasswordDialogOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleResetPassword} className="bg-gradient-primary">
+              Redefinir Senha
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
