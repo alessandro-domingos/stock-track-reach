@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +11,7 @@ import { Users, UserPlus, Shield, Key } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
+import { getErrorMessage } from "@/lib/utils";
 import type { Database } from "@/integrations/supabase/types";
 
 type UserRole = Database['public']['Enums']['user_role'];
@@ -37,7 +38,7 @@ const Admin = () => {
   const { toast } = useToast();
   const { hasRole } = useAuth();
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setLoading(true);
     const { data: usersData, error } = await (supabase.rpc as any)('get_users_with_roles');
     if (error) {
@@ -54,11 +55,11 @@ const Admin = () => {
     }));
     setUsers(usersMapped);
     setLoading(false);
-  };
+  }, [toast]);
 
   useEffect(() => {
     fetchUsers();
-  }, []);
+  }, [fetchUsers]);
 
   const handleCreateUser = async () => {
     if (!newUserEmail || !newUserNome || !newUserPassword || !newUserRole) {
@@ -84,7 +85,7 @@ const Admin = () => {
         toast({
           variant: "destructive",
           title: "Erro ao criar usuário",
-          description: (error as any)?.message || "Falha no servidor"
+          description: getErrorMessage(error, "Falha no servidor")
         });
         return;
       }
@@ -105,11 +106,11 @@ const Admin = () => {
         await new Promise(resolve => setTimeout(resolve, 500));
         fetchUsers();
       }
-    } catch (err: any) {
+    } catch (err) {
       toast({
         variant: "destructive",
         title: "Erro ao criar usuário",
-        description: err.message || "Erro desconhecido"
+        description: getErrorMessage(err)
       });
     }
   };
